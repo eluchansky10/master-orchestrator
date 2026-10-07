@@ -325,6 +325,22 @@ class EndToEnd(unittest.TestCase):
         col_slim = [r for r in man["rows"] + man["candidates"] if r["id"].startswith("colombia")][0]
         self.assertNotIn("path", col_slim)
 
+    def test_confirm_and_drop(self):
+        m = self.run_all()
+        self.assertEqual(self.row(m, "loops-L6")["decision"], "confirm")
+        base = ["--root", str(self.root), "--projects", str(self.projects)]
+        self.assertEqual(H.main(base + ["confirm", "pc/loops-L6"]), 0)
+        self.assertEqual(H.main(base + ["drop", "apeira-lawsuit-loops"]), 0)
+        m2 = self.run_all()
+        l6 = self.row(m2, "loops-L6")
+        self.assertEqual((l6["decision"], l6["copy_status"]), ("harvest (confirmed by Elliot)", "by_reference"))
+        self.assertTrue((self.root / "blitz-returns" / "pc" / "loops-L6" / "RUNS-HERE.md").exists())
+        ap = self.row(m2, "apeira-lawsuit-loops")
+        self.assertEqual(ap["decision"], "dropped by Elliot")
+        rep = Path(m2["report"]).read_text()
+        self.assertIn("apeira-lawsuit-loops", rep.split("## 5. Excluded for privacy")[1])  # still named
+        self.assertNotIn("apeira-lawsuit-loops on pc", rep.split("## 4.")[1].split("## 5.")[0])
+
     def test_dry_run_copies_nothing(self):
         m = self.run_all("--dry-run")
         self.assertTrue(all(r.get("copy_status") in ("dry-run", "error") or r["host"] == "pc"

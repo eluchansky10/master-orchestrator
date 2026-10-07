@@ -1160,6 +1160,7 @@ def cmd_scan(cfg: Cfg, m: dict | None = None) -> dict:
             r["note"] = "returns copy of a sprint folder that is harvested"
 
     # Unmatched candidates: discovered runs and pattern-recognized pushes.
+    confirmed, dropped = read_choices(cfg, "confirmed"), read_choices(cfg, "dropped")
     cands = []
     for hn, flist in folders_by_host.items():
         h = hosts_by_name[hn]
@@ -1185,8 +1186,13 @@ def cmd_scan(cfg: Cfg, m: dict | None = None) -> dict:
                    "push_signals": sig, "push_score": score, "returns_copy": _is_returns_copy(f),
                    "sessions": len(sess), "models_seen": sorted({x for s in sess for x in s.get("models", [])})[:4]}
             row["sensitive"], row["sensitive_reason"] = classify(cfg, row, f)
+            names = {f["name"], f["path"], f"{hn}/{f['name']}"}
             if f.get("cut_off"):
                 row["harvest"], row["decision"] = False, "cut off before it was read; re-run with --slow"
+            elif names & dropped:
+                row["harvest"], row["decision"] = False, "dropped by Elliot"
+            elif names & confirmed:
+                row["harvest"], row["decision"] = True, "harvest (confirmed by Elliot)"
             elif known or score >= 4:
                 row["harvest"], row["decision"] = True, "harvest"
             elif score >= 2:
@@ -1211,6 +1217,27 @@ def cmd_scan(cfg: Cfg, m: dict | None = None) -> dict:
     m["steps"]["scan"] = now().isoformat(timespec="seconds")
     save_manifest(cfg, m)
     return m
+
+
+def read_choices(cfg: Cfg, kind: str) -> set[str]:
+    """Elliot's answers to "pattern-recognized pushes to confirm", kept across
+    harvests in blitz-returns\\_inputs\\{confirmed,dropped}.txt (one name,
+    host/name or full path per line)."""
+    p = cfg.dest / "_inputs" / f"{kind}.txt"
+    if not p.exists():
+        return set()
+    return {ln.strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+
+
+def cmd_choose(cfg: Cfg, kind: str, names: list[str]) -> None:
+    d = cfg.dest / "_inputs"
+    d.mkdir(parents=True, exist_ok=True)
+    have = read_choices(cfg, kind)
+    with open(d / f"{kind}.txt", "a", encoding="utf-8") as fh:
+        for n in names:
+            if n not in have:
+                fh.write(n + "\n")
+    print(f"{kind}: {', '.join(names)}. Re-run `harvest.py all` to apply.")
 
 
 def _is_returns_copy(f: dict) -> bool:
@@ -1689,6 +1716,7 @@ def build_report(cfg: Cfg, m: dict, project_sync: str | None = None) -> str:
     disc = [c for c in cands if c.get("decision") == "harvest"]
     conf = [c for c in cands if c.get("decision") == "confirm"]
     low = [c for c in cands if str(c.get("decision", "")).startswith("ignored")]
+    dropped = [c for c in cands if c.get("decision") == "dropped by Elliot"]
     sec4 = ["## 4. Discovered runs and pattern-recognized pushes", ""]
     if disc:
         sec4.append("Harvested without a plan:")
@@ -1697,15 +1725,17 @@ def build_report(cfg: Cfg, m: dict, project_sync: str | None = None) -> str:
         if len(disc) > 12:
             sec4.append(f"- and {len(disc) - 12} more")
     if conf:
-        sec4 += ["", "Pattern-recognized pushes to confirm (not copied; say \"harvest <name>\" to copy one):"]
+        sec4 += ["", "Pattern-recognized pushes to confirm (not copied; `harvest.py confirm <name>` copies one from "
+                 "the next harvest on, `harvest.py drop <name>` stops listing it):"]
         sec4 += [f"- {c['id']} on {c['host']} (`{c['path']}`): score {c['push_score']} ({', '.join(c['push_signals'])})"
                  for c in conf[:12]]
         if len(conf) > 12:
             sec4.append(f"- and {len(conf) - 12} more")
     if not disc and not conf:
         sec4.append("None.")
-    if low:
-        sec4 += ["", f"{len(low)} low-signal folders ignored (listed in harvest-manifest.json)."]
+    if low or dropped:
+        sec4 += ["", f"{len(low)} low-signal folders ignored and {len(dropped)} dropped by you "
+                     f"(listed in harvest-manifest.json)."]
 
     # Section 5 is never shortened: every restricted item is named.
     sec5 = ["## 5. Excluded for privacy", ""]
@@ -1897,6 +1927,10 @@ def main(argv: list[str] | None = None) -> int:
     p_rows = sub.add_parser("rows", help="print plan rows from documents as JSON (for the cloud path)")
     p_zip = sub.add_parser("sync-zip", help="zip the non-restricted subset for the Project")
     sub.add_parser("selftest", help="run the built-in tests")
+    p_conf = sub.add_parser("confirm", help="harvest these pattern-recognized pushes from now on")
+    p_drop = sub.add_parser("drop", help="stop listing these pattern-recognized pushes")
+    for p in (p_conf, p_drop):
+        p.add_argument("names", nargs="+", help="run name, host/name, or full path")
     for p in (p_plan, p_all, p_rows):
         p.add_argument("--docs", action="append", help="extra folder holding blitz/, intake/, prompts/ (repeatable)")
         p.add_argument("--extra-rows", action="append", help="JSON list of rows to add (from the cloud thread)")
@@ -1935,6 +1969,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.out).write_text(text, encoding="utf-8")
         else:
             print(text)
+        return 0
+    if args.cmd in ("confirm", "drop"):
+        cmd_choose(cfg, "confirmed" if args.cmd == "confirm" else "dropped", args.names)
         return 0
     if args.cmd == "plan":
         cmd_plan(cfg)
