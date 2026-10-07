@@ -1,0 +1,210 @@
+{
+ "generated_utc": "2026-10-07T23:13:35+00:00",
+ "version": 1,
+ "docs": [
+  "/mnt/project-files/master-orchestrator/blitz/agent2-gmail-tonight-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/blitz/agent2-maturity-scales-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/blitz/agent2-outreach-2clients-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/blitz/agent2-resume-on-cybernova-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/blitz/returns-2026-10-05/community-series-drafts-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/blitz/weekly-blitz-2026-10-05-refresh.md",
+  "/mnt/project-files/master-orchestrator/blitz/weekly-blitz-2026-10-05.md",
+  "/mnt/project-files/master-orchestrator/intake/run-list-2026-09-30.md",
+  "/mnt/project-files/master-orchestrator/intake/run-on-macbook-2026-10-01.md",
+  "/mnt/project-files/master-orchestrator/macbook-2026-10-01/RUN-1-NASARAI-PROMPT.txt",
+  "/mnt/project-files/master-orchestrator/macbook-2026-10-01/RUN-2-COLOMBIA-PROMPT.txt",
+  "/mnt/project-files/master-orchestrator/prompts/loop-package-prompt-codex.md",
+  "/mnt/project-files/master-orchestrator/prompts/loop-package-prompt.md",
+  "/mnt/project-files/SPRINT.md",
+  "/mnt/project-files/GOAL.txt"
+ ],
+ "rows": [
+  {
+   "id": "L7-nasarai-devpush-2026-09-30",
+   "title": "Finish the nasarai.com dev push (L7)",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md; agent2-maturity-scales-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/L7-nasarai-devpush-2026-09-30",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": true
+  },
+  {
+   "id": "L8-metronome-headless-2026-09-30",
+   "title": "Finish the headless Metronome core (L8)",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md; agent2-maturity-scales-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/L8-metronome-headless-2026-09-30",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": true
+  },
+  {
+   "id": "writing-home-L4-2026-10-01",
+   "title": "Pretest the 10 community skills (L4)",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/writing-home-L4-2026-10-01",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": true
+  },
+  {
+   "id": "writing-home-drafts-2026-10-05",
+   "title": "First drafts of all the posts, paste",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md; agent2-resume-on-cybernova-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/writing-home-drafts-2026-10-05",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": false
+  },
+  {
+   "id": "writing-home-L3-2026-10-01",
+   "title": "First drafts of all the posts, paste",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/writing-home-L3-2026-10-01",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": false
+  },
+  {
+   "id": "nasarai-coach-channel-2026-10-05",
+   "title": "Coach channel, paste (add `ultracode` in front if you want the research done by a team of agents)",
+   "source_doc": "agent2-gmail-tonight-2026-10-05.md; agent2-outreach-2clients-2026-10-05.md; agent2-resume-on-cybernova-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/nasarai-coach-channel-2026-10-05",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Tonight on agent2 with the Gmail account",
+   "title_from_table": false
+  },
+  {
+   "id": "maturity-scales-2026-10-05",
+   "title": "Loop: AI maturity scales for coaches and CEOs on nasarai.com (agent2, Gmail Max)",
+   "source_doc": "agent2-maturity-scales-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/maturity-scales-2026-10-05",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Loop: AI maturity scales for coaches and CEOs on nasarai.com (agent2, Gmail Max)",
+   "title_from_table": false
+  },
+  {
+   "id": "outreach-2clients-2026-10-05",
+   "title": "Outreach loop: 2 new Metronomics/AI advisory clients (agent2, Gmail Max)",
+   "source_doc": "agent2-outreach-2clients-2026-10-05.md",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/outreach-2clients-2026-10-05",
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Outreach loop: 2 new Metronomics/AI advisory clients (agent2, Gmail Max)",
+   "title_from_table": false
+  },
+  {
+   "id": "nasarai-marketing-q4-revenue-sprint-2026-09-30",
+   "title": "Nasarai Q4 revenue sprint L1",
+   "source_doc": "agent2-outreach-2clients-2026-10-05.md; run-on-macbook-2026-10-01.md; RUN-1-NASARAI-PROMPT.txt",
+   "host_hint": "macbook",
+   "path_hint": "~/Downloads/nasarai-marketing-q4-revenue-sprint-2026-09-30/",
+   "account": "elliot@nasarai.com",
+   "launch_path": "B",
+   "sensitive": null,
+   "doc_title": "Outreach loop: 2 new Metronomics/AI advisory clients (agent2, Gmail Max)",
+   "title_from_table": true
+  },
+  {
+   "id": "nasarai-q4-revenue-L1-2026-09-30",
+   "title": "Staging for the Nasarai sprint (on approval)",
+   "source_doc": "run-list-2026-09-30.md",
+   "host_hint": null,
+   "path_hint": null,
+   "account": null,
+   "launch_path": null,
+   "sensitive": null,
+   "doc_title": "Loop intake: run list, 2026-09-30 (proposed, waiting on Elliot)",
+   "title_from_table": false
+  },
+  {
+   "id": "colombia-project-playa-2026-10-01",
+   "title": "RUN-2-COLOMBIA-PROMPT.txt",
+   "source_doc": "run-on-macbook-2026-10-01.md; RUN-2-COLOMBIA-PROMPT.txt",
+   "host_hint": "macbook",
+   "path_hint": "~/Downloads/colombia-project-playa-2026-10-01/",
+   "account": "elliot@nasarai.com",
+   "launch_path": null,
+   "sensitive": true,
+   "doc_title": "Run two loops on the MacBook tonight (Claude Desktop, Nasarai account)",
+   "title_from_table": true
+  },
+  {
+   "id": "L6-jev-conformed-2026-09-30",
+   "title": "L6 sprint spec: Jev and the CureIS conformed data model",
+   "source_doc": "SPRINT.md; GOAL.txt",
+   "host_hint": "agent2",
+   "path_hint": "/Users/agent2/orchestrator/sprints/L6-jev-conformed-2026-09-30",
+   "account": null,
+   "launch_path": "A",
+   "sensitive": true,
+   "doc_title": "L6 sprint spec: Jev and the CureIS conformed data model",
+   "title_from_table": false
+  },
+  {
+   "id": "lawsuit-loops-2026-10-01",
+   "title": "Lawsuit loops (Apeira; US Pave and Toptal)",
+   "source_doc": "thread:Lawsuit loops on agent2",
+   "host_hint": "agent2",
+   "path_hint": null,
+   "account": "elliot@cybernovaequity.com",
+   "launch_path": "A",
+   "sensitive": true,
+   "match_words": [
+    "lawsuit",
+    "apeira",
+    "fifa",
+    "pave",
+    "toptal"
+   ],
+   "note": "specs written 2026-10-01, never launched (waits on Elliot's 'yes, copy')"
+  },
+  {
+   "id": "cureis-ai-strategy-2026-09-30",
+   "title": "CureIS ai-strategy package loops (L1 to L4)",
+   "source_doc": "thread:Loop package intake",
+   "host_hint": null,
+   "path_hint": null,
+   "account": null,
+   "launch_path": null,
+   "sensitive": true,
+   "match_words": [
+    "cureis"
+   ],
+   "note": "sent back to their thread at intake, never launched (L6 Jev loop is the part that ran)"
+  },
+  {
+   "id": "nasarai-claude-design-2026-10-05",
+   "title": "Claude Design pass for nasarai.com (3 homepage variations)",
+   "source_doc": "thread:Weekly blitz run",
+   "host_hint": "agent2",
+   "path_hint": null,
+   "account": "luchansky.elliot.a@gmail.com",
+   "launch_path": "B",
+   "sensitive": false,
+   "note": "ran 2026-10-05 per the Weekly blitz run thread; folder not named there"
+  }
+ ]
+}

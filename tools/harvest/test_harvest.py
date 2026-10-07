@@ -78,6 +78,7 @@ class Fixture:
         self.tools.mkdir(parents=True)
         ssh = write(self.tmp / "fake-ssh", FAKE_SSH)
         ssh.chmod(0o755)
+        self.ssh = ssh
         os.environ["FAKE_SSH"] = str(ssh)
         write(self.tools / "fleet.py", FAKE_FLEET)
         write(self.tools / "hosts.conf", "\n".join([
@@ -87,7 +88,7 @@ class Fixture:
         self.homes = {"agent2@agents-mac-mini-1": str(self.tmp / "agent2"), "agent1@100.82.254.11": str(self.tmp / "agent1")}
         if macbook_up:
             self.homes["luchanskyelliot@100.116.248.10"] = str(self.tmp / "macbook")
-        os.environ["FAKE_HOMES"] = json.dumps(self.homes)
+        self.activate()
         self.make_agent2()
         self.make_agent1()
         self.make_macbook()
@@ -209,6 +210,11 @@ class Fixture:
             harvest.main(list(args) + ["--root", str(self.root)])
         return out.getvalue()
 
+    def activate(self):
+        """Point the fake ssh at this fixture (another fixture may have been made since)."""
+        os.environ["FAKE_SSH"] = str(self.ssh)
+        os.environ["FAKE_HOMES"] = json.dumps(self.homes)
+
     def manifest(self):
         return json.loads((self.root / "blitz-returns" / "harvest-manifest.json").read_text(encoding="utf-8"))
 
@@ -222,6 +228,7 @@ class Fixture:
 class HarvestTest(unittest.TestCase):
     def setUp(self):
         sys.modules.pop("fleet", None)
+        self.fx.activate()
         os.environ["HARVEST_PC_HOME"] = str(self.fx.tmp / "pc-home")   # keep the real PC home out of tests
 
     @classmethod
@@ -313,7 +320,9 @@ class HarvestTest(unittest.TestCase):
         # report
         rep = Path(m["harvest"]["report"]).read_text(encoding="utf-8")
         self.assertIn("macbook unreachable", rep)
-        self.assertIn("lawsuit-damages-L9-2026-10-01", rep.split("## 5.")[1].split("## 6.")[0])
+        excluded = rep.split("## 5.")[1].split("## 6.")[0]
+        for rid in ("lawsuit-damages-L9-2026-10-01", "lawsuit-loops-2026-10-01", "colombia-project-playa-2026-10-01"):
+            self.assertIn(rid, excluded)
         self.assertLess(len(rep.splitlines()), 151)
         self.assertEqual(m["harvest"]["audit"], [])
 
@@ -356,6 +365,15 @@ class HarvestTest(unittest.TestCase):
             self.assertEqual(law.get("return", "[withheld: restricted]"), "[withheld: restricted]")
         finally:
             fx.close()
+
+    @unittest.skipIf(os.name == "nt", "end-to-end fixture needs a POSIX sh as the fake Mac")
+    def test_9_find_prints_each_host(self):
+        out = self.fx.run("find", "--days", "14")
+        self.assertIn("macbook (luchanskyelliot@100.116.248.10): unreachable", out)
+        self.assertIn("folder ~/orchestrator/sprints/L7-nasarai-devpush-2026-09-30", out)
+        self.assertIn("session cwd=~/fleet-harness models=claude-opus-5-5", out)
+        self.assertIn("prompts (1): outreach-2clients-2026-10-05.md", out)
+        self.assertNotIn("BODY-SHOULD-NOT-LEAK", out)
 
     def test_5_doc_parser(self):
         rows = {r["id"]: r for r in harvest.parse_doc("\n".join([

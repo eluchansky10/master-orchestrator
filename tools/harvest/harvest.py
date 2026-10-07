@@ -386,7 +386,9 @@ def parse_doc(text, source):
                     title = max(cells, key=len) if cells else None
                 else:
                     head = next((c.lstrip("# ").strip() for c in reversed(lines[: n + 1]) if c.startswith("#")), "")
-                    title = head if head and head.lower() not in GENERIC_HEADINGS else title_doc
+                    title = head if head and head.lower() not in GENERIC_HEADINGS else None
+                    if not title and (not doc_host or host == doc_host):
+                        title = title_doc      # a doc about another host's run does not lend it its title
                 near_lines = " ".join(lines[n: n + 3])
                 sens = None
                 if (keyword_hits(rid + " " + (title or "") + " " + title_doc, STRONG_WORDS)
@@ -396,6 +398,7 @@ def parse_doc(text, source):
                                             "path_hint": None, "account": None, "launch_path": None,
                                             "sensitive": None, "doc_title": title_doc})
                 from_table = ln.lstrip().startswith("|")
+                title = re.sub(r"^\d+[.)]\s+", "", title or "") or None    # "3. First drafts" -> "First drafts"
                 if title and (not row["title"] or (from_table and not row.get("title_from_table"))):
                     row["title"] = title[:120]
                     row["title_from_table"] = from_table
@@ -434,6 +437,8 @@ def merge_rows(rows):
             elif k == "sensitive":
                 if v is True:
                     cur[k] = True
+            elif k == "title" and v and r.get("title_from_table") and not cur.get("title_from_table"):
+                cur["title"], cur["title_from_table"] = v, True
             elif not cur.get(k) and v:
                 cur[k] = v
     return list(by.values())
@@ -967,6 +972,8 @@ def cmd_scan(ctx):
                 r.update({"status": "already_returned", "note": "its RETURN.md is in the returns repo; no folder found"})
             elif staged:
                 r.update({"status": "not_found", "note": "prompt staged in %s but no run folder: never started" % staged[0]["dir"]})
+            elif r.get("note"):     # the plan or thread already says what happened to it
+                r.update({"status": "not_found", "note": "no folder found; its source says: " + r["note"]})
             else:
                 r.update({"status": "not_found", "note": "no folder or session on any reachable host: probably never launched"
                           + ("" if all(v.get("reachable") for v in hinfo.values()) else ", or on a host that was unreachable")})
@@ -1544,11 +1551,20 @@ def cmd_report(ctx, path=None):
     L.append("")
     # 5. excluded for privacy (reproduced verbatim in the cloud reply)
     L += ["## 5. Excluded for privacy", ""]
-    excl = [r for r in rows if r.get("status") in ("found", "confirm", "pointer") and r.get("sensitive") is not False]
+    # every item marked sensitive or unknown, found or not, so restricted plans are named even when nothing ran
+    excl = [r for r in rows if r.get("sensitive") is not False and (
+        r.get("status") in ("found", "confirm", "pointer") or (r.get("sensitive") is True and r.get("kind") == "planned"))]
     for r in excl:
-        L.append("- %s (%s): %s. %s" % (cell(r["id"], 50), r.get("host"), r.get("sensitive_why"),
-                                        "Copied to the PC only; not synced to the Project." if r.get("dest") and r.get("host") != "pc"
-                                        else "Not copied; not synced to the Project."))
+        if r.get("dest") and r.get("host") != "pc":
+            done = "Copied to the PC only; not synced to the Project."
+        elif r.get("status") == "expanded":
+            done = "Topic: each matching folder is its own line here."
+        elif r.get("status") in ("not_found", "not_found_yet", "not_scanned", "planned"):
+            done = "Not found this run (%s); if found it stays PC-only." % r["status"].replace("_", " ")
+        else:
+            done = "Not copied; not synced to the Project."
+        why = r.get("sensitive_why") or "restricted in its plan (%s)" % cell(r.get("source_doc") or "", 50)
+        L.append("- %s (%s): %s. %s" % (cell(r["id"], 50), r.get("host") or r.get("host_hint") or "host?", why, done))
     names = sorted({n for r in rows for n in (r.get("excluded_names") or [])})
     if names:
         L.append("- Files never copied under the credential rule: %s%s" % (", ".join(names[:12]),
@@ -1684,13 +1700,56 @@ def cmd_sync(ctx):
     return zpath
 
 
+def cmd_find(ctx, named_paths):
+    """Run remote-find.sh on each selected Mac and print what it saw (no manifest change). Stage-1 test and debugging aid."""
+    for h in ctx.hosts():
+        if h["name"] == "pc":
+            continue
+        ok, info = reach(ctx, h)
+        if not ok:
+            print("%s (%s): unreachable: %s" % (h["name"], h["ssh"], info))
+            continue
+        t0 = time.time()
+        recs, meta = remote_scan(ctx, h, named_paths)
+        home = next((r.get("home") for r in recs if r.get("kind") == "host"), "") or "~"
+        kinds = {}
+        for r in recs:
+            kinds[r.get("kind")] = kinds.get(r.get("kind"), 0) + 1
+        print("%s (%s = %s): %.0fs, %s, records %s" % (h["name"], h["ssh"], info, time.time() - t0,
+                                                     "PARTIAL" if meta["partial"] else "complete", kinds))
+        if meta["stderr"]:
+            print("  stderr: " + cell(meta["stderr"], 200))
+        for r in recs:
+            k = r.get("kind")
+            if k == "folder":
+                rn = r.get("runner") or {}
+                flags = [n for n, f in (("RETURN", "has_return"), ("state", "has_state"), ("PROGRESS", "has_progress"),
+                                        ("MANIFEST", "has_manifest")) if r.get(f)]
+                print("  folder %s [%s] %s, %s files, %s%s%s%s" % (
+                    r["path"].replace(home, "~", 1), r.get("why"), human(r.get("bytes")), r.get("nfiles"),
+                    "recent " if r.get("recent") else "old ", "+".join(flags) or "no markers",
+                    (" runner=%s/%s" % (rn.get("status") or "-", rn.get("account") or "-")) if rn else "",
+                    " CONFIDENTIAL-MARKS" if r.get("confidential_marks") else ""))
+            elif k == "session":
+                print("  session cwd=%s models=%s %s..%s subagents=%s" % (
+                    (r.get("cwd") or "").replace(home, "~", 1), ",".join(r.get("models") or []) or "-",
+                    r.get("first_ts") or "?", r.get("last_ts") or "?", r.get("subagent_logs")))
+            elif k in ("zip", "warn"):
+                print("  %s %s" % (k, cell(r.get("path") or r.get("msg"), 160)))
+        names = [r.get("name") for r in recs if r.get("kind") == "prompt"]
+        if names:
+            print("  prompts (%d): %s" % (len(names), cell(", ".join(names), 400)))
+        print("  raw: %s" % (ctx.scan_dir / ("%s-%s.jsonl" % (h["name"], ctx.started.strftime("%Y%m%dT%H%M")))))
+
+
 # ---------------------------------------------------------------- command line
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["plan", "scan", "copy", "push", "report", "all", "check", "seed", "sync", "confirm",
-                                    "drop"])
-    ap.add_argument("docs", nargs="*", help="seed: planning docs or folders; confirm/drop: folder names or paths")
+                                    "drop", "find"])
+    ap.add_argument("docs", nargs="*", help="seed: planning docs or folders; confirm/drop: folder names or paths; "
+                                           "find: extra remote paths to describe")
     ap.add_argument("--days", type=int, default=8)
     ap.add_argument("--host", action="append")
     ap.add_argument("--slow", action="store_true")
@@ -1724,6 +1783,8 @@ def main(argv=None):
         cmd_sync(ctx)
     elif a.cmd in ("confirm", "drop"):
         cmd_choose(ctx, a.cmd, a.docs)
+    elif a.cmd == "find":
+        cmd_find(ctx, a.docs)
     elif a.cmd == "all":
         cmd_check(ctx)
         cmd_plan(ctx)
