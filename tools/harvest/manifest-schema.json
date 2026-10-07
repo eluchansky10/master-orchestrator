@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "blitz-harvest manifest",
+  "description": "harvest-manifest.json, written by tools/harvest/harvest.py beside each HARVEST-<date>.md. One harvest per file; _history/ keeps earlier ones.",
+  "type": "object",
+  "required": ["schema", "harvest_date", "window_days", "hosts", "rows", "candidates"],
+  "properties": {
+    "schema": {"const": 1},
+    "harvest_date": {"type": "string", "description": "YYYY-MM-DD, UTC"},
+    "generated": {"type": "string"},
+    "window_days": {"type": "integer", "minimum": 7, "description": "trailing window; default 8"},
+    "window_since": {"type": "string"},
+    "pc": {"type": "string"},
+    "mode": {"enum": ["real", "dry-run"]},
+    "project_sync_line": {"type": "string"},
+    "docs_read": {"type": "array", "items": {"type": "string"}},
+    "hosts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "target": {"type": ["string", "null"]},
+          "account": {"type": "string"},
+          "source": {"type": "string", "description": "hosts.conf, default or local"},
+          "reachable": {"type": ["boolean", "null"]},
+          "partial": {"type": "boolean"},
+          "error": {"type": "string"},
+          "account_hint": {"type": "string"},
+          "hostname": {"type": "string"}
+        }
+      }
+    },
+    "rows": {
+      "description": "Planned runs: from weekly-blitz plans, run prompts, fleet state, the returns repo, or rows the cloud thread added.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/row"}
+    },
+    "candidates": {
+      "description": "Runs no plan names: sprint folders found on a host (discovered:<host>) and pattern-recognized pushes (pattern:<host>).",
+      "type": "array",
+      "items": {"$ref": "#/$defs/row"}
+    },
+    "stray_sessions": {"type": "array", "description": "Latest-model sessions whose folder is outside the allowed roots; counted, never copied."},
+    "returns_index": {"type": "object", "description": "run id -> {path, sha256} of RETURN.md files already in orchestrator-returns"},
+    "tailscale_peers": {"type": "array"},
+    "possible_hosts": {"type": "array", "description": "Light-touch evidence of runs on other Tailscale peers; never scanned automatically."},
+    "pc_pages": {"type": "array", "items": {"type": "string"}},
+    "disk": {"type": "object"},
+    "credential_check": {"type": "array", "items": {"type": "string"}, "description": "Must be empty: credential-like files under blitz-returns."},
+    "pushed": {
+      "type": "object",
+      "properties": {
+        "files": {"type": "array", "items": {"type": "string"}},
+        "commit": {"type": "string"},
+        "pushed": {"type": "boolean"},
+        "error": {"type": "string"},
+        "fleet_pull": {"type": "string"}
+      }
+    },
+    "project_sync": {"description": "\"not run\", or {zip, runs} after sync-zip"},
+    "report": {"type": "string"},
+    "steps": {"type": "object"}
+  },
+  "$defs": {
+    "row": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"type": "string", "description": "sprint id or run folder name"},
+        "title": {"type": "string"},
+        "source_doc": {"type": "string", "description": "weekly-blitz:<file>, prompt:<file>, fleet:<file>, returns-repo, thread:<title>, discovered:<host> or pattern:<host>"},
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "host_hint": {"type": "string"},
+        "path_hint": {"type": "string"},
+        "account": {"type": "string"},
+        "launch_path": {"enum": ["A", "B", ""]},
+        "model_hint": {"type": "array", "items": {"type": "string"}},
+        "effort_hint": {"type": "array", "items": {"type": "string"}},
+        "prompt_file": {"type": "string"},
+        "doc_file": {"type": "string"},
+        "status": {"enum": ["planned", "found", "not_found", "not_found_yet"]},
+        "why_missing": {"type": "string"},
+        "host": {"type": "string"},
+        "path": {"type": "string"},
+        "match_reason": {"type": "string"},
+        "has_return": {"type": "boolean"},
+        "return_sha256": {"type": "string"},
+        "already_returned": {"type": "string"},
+        "run_status": {"type": "string"},
+        "push_score": {"type": "integer", "minimum": 0, "maximum": 5},
+        "push_signals": {"type": "array", "items": {"enum": ["model", "intensity", "location", "timing", "shape"]}},
+        "decision": {"type": "string", "description": "candidates only: harvest, confirm, ignored (low signal), or cut off"},
+        "sensitive": {"enum": [true, false, "unknown"]},
+        "sensitive_reason": {"type": "string"},
+        "harvest": {"type": "boolean"},
+        "size_bytes": {"type": "integer"},
+        "copy_status": {"type": "string", "description": "copied, copied_control_only, unchanged, by_reference, dry-run, error, refused (disk)"},
+        "dest": {"type": "string"},
+        "control_only": {"type": "boolean"},
+        "skipped": {"type": "object", "description": "reason -> count of files left behind (credentials, caches, git history)"},
+        "return_push": {"type": "string"}
+      }
+    }
+  }
+}
