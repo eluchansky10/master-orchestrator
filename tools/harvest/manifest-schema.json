@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "blitz-harvest manifest",
-  "description": "blitz-returns/harvest-manifest.json, rewritten by tools/harvest/harvest.py on every plan, scan, copy, push and report. The report HARVEST-<date>.md is the short view of it; history lives in the reports and in copy-ledger.json.",
+  "description": "blitz-returns/harvest-manifest.json, rewritten by tools/harvest/harvest.py on every plan, scan, copy, push and report. The report HARVEST-<date>.md is the short view of it; history lives in the reports and in harvest-ledger.json.",
   "type": "object",
   "required": [
     "harvest",

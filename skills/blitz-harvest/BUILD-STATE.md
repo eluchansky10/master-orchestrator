@@ -5,7 +5,7 @@ Brief: BUILD-PROMPT.md + PLAN.md (unchanged). This file is the only thing a resu
 Mirror: C:\Projects\master-orchestrator\skills\blitz-harvest\BUILD-STATE.md (written when the PC session is up).
 
 ## Resume here
-Stage 1: code is on branch claude/project-thread-9s605g of eluchansky10/master-orchestrator (tools/harvest/, harvest-seeds/). 9 tests pass in the cloud. Sent the PC session the stage-1 brief (23:2xZ): clone the branch to C:\Projects\master-orchestrator\.harvest-src, install tools\harvest\, copy the seed to blitz-returns\seeds\, patch_fleet.py, tests, `harvest.py check`, `harvest.py find --days 14`. Next: read its report, paste evidence below, tick stage 1 for agent2 (MacBook half waits on Elliot), go to stage 2 (`plan` + `scan`).
+BLOCKED at stage 1, step 1 (PC). The PC session's auto-mode classifier refused cloning branch claude/project-thread-9s605g (head 80abb56) into C:\Projects\master-orchestrator\.harvest-src: "[Untrusted Code Integration]". Nothing changed on the PC or any Mac. Asked Elliot once (23:3xZ) to approve in this thread with the exact sentence below. When he answers: re-send the same stage-1 brief (clone, install, seed, patch_fleet, tests, check, `find --days 14`) and continue. Meanwhile: draft SKILL.md (stage 5 text) in the cloud; nothing else can run without the PC.
 
 ## Stages (PLAN.md section 11)
 - [x] 0. Setup: state file, fold in the earlier build thread's notes, PC session, PC inventory (fleet.py, hosts.conf, returns clone, reachability)
@@ -44,9 +44,10 @@ Decision (23:1xZ): keep this loop's code (built after the PC inventory, uses fle
 
 ## Open questions for Elliot
 - 22:5xZ asked once: wake the MacBook Air and confirm Tailscale is connected (it is offline; blocks the MacBook half of stage 1 and acceptance "all hosts reachable").
+- 23:3xZ asked once: approve the PC running the harvest code. Sentence for him to send in the thread: "I approve cloning branch claude/project-thread-9s605g of eluchansky10/master-orchestrator into C:\Projects\master-orchestrator\.harvest-src and running its harvest scripts on the PC". Alternative: a Claude Code allow rule on the PC for that clone and for `C:\Python313\python.exe C:\Projects\master-orchestrator\tools\harvest\*`.
 
 ## Refusals and narrowed steps
-(none yet)
+- 2026-10-07 ~23:30Z, PC session, stage 1 step 1: `git clone --depth 1 --branch claude/project-thread-9s605g https://github.com/eluchansky10/master-orchestrator.git C:\Projects\master-orchestrator\.harvest-src` refused by the auto-mode classifier, reason "[Untrusted Code Integration]". The step already stayed inside C:\Projects, so it cannot be narrowed further; any other way of landing the same code (pasting it, writing it file by file) would be routing around the refusal, so none was tried. Waiting on Elliot's approval. `git ls-remote` showed 80abb567e1169862c9c5a6b6a92d1dee9a1dcf8e (exit 0).
 
 ## Proposed plan corrections
 1. Section 9 (hosts.conf rows for agent1 and the PC): fleet.py's load_hosts() reads fields 0-6 only, so an 8th `harvest_only` column alone would let the 15-minute balance routine SSH to (and possibly dispatch to) agent1 and a `local` PC row. Fix being applied: add an optional 8th column and make load_hosts() drop harvest-only rows unless called with harvest=True. (Found by the PC session too.)
