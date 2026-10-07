@@ -63,7 +63,8 @@ JUNK = re.compile(r"^(\.DS_Store|\._.*)$")
 SECRET_DIRS = {".ssh", ".gnupg", "Keychains", ".aws"}
 TAR_EXCLUDES = sorted(CACHE_DIRS) + [
     ".git/objects", "*/.git/objects", ".git/lfs", "*/.git/lfs", ".git/logs", "*/.git/logs", ".git/modules",
-    "*/.git/modules", ".git/worktrees", "*/.git/worktrees", ".git/index", "*/.git/index", ".ssh", ".gnupg",
+    "*/.git/modules", ".git/worktrees", "*/.git/worktrees", ".git/index", "*/.git/index", ".ssh", ".gnupg", ".aws",
+    "Keychains", ".config/orchestrator",
     "*token*", "*Token*", "*TOKEN*", "*secret*", "*Secret*", "*SECRET*", "*credential*", "*Credential*",
     "*.pem", "id_*", ".env", ".env.*", "*.keychain", "*.keychain-db", ".netrc", ".npmrc", "*.p12", "*.key",
     "auth.json", ".git-credentials", ".pypirc", "*.pfx", ".DS_Store", "._*"]
@@ -1329,12 +1330,23 @@ def cmd_check(ctx, quiet=False):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("fixture\n", encoding="utf-8")
         results = []
-        for label, packer in (("this PC's tar with the remote excludes", "tar"), ("python tar, no excludes", "py")):
+        # the Macs run bsdtar (libarchive); Windows ships the same tar in System32, so prefer it over Git's GNU tar
+        bsdtar = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
+        tar = str(bsdtar) if os.name == "nt" and bsdtar.exists() else shutil.which("tar")
+        raw_note = ""
+        for label, packer in (("%s with the remote excludes" % (tar or "no tar found; python tar"), "tar"),
+                              ("python tar, no excludes", "py")):
             dest = Path(tmp) / ("dest-" + packer)
-            if packer == "tar" and shutil.which("tar"):
-                cmd = ["tar", "-czf", "-"] + ["--exclude=" + e for e in TAR_EXCLUDES] + ["-C", str(src.parent), src.name]
+            if packer == "tar" and tar:
+                cmd = [tar, "-czf", "-"] + ["--exclude=" + e for e in TAR_EXCLUDES] + ["-C", str(src.parent), src.name]
                 p = subprocess.run(cmd, capture_output=True)
                 stream = io.BytesIO(p.stdout)
+                with tarfile.open(fileobj=io.BytesIO(p.stdout), mode="r:gz") as tf:
+                    sent = {m.name.split("/", 1)[1] for m in tf.getmembers() if m.isfile() and "/" in m.name}
+                over_wire = sorted(k for k in sent if not files.get(k, True))
+                raw_note = "remote excludes alone stopped %d of %d never-copy files%s" % (
+                    sum(1 for k, v in files.items() if not v) - len(over_wire), sum(1 for v in files.values() if not v),
+                    "; the local filter caught %s" % over_wire if over_wire else "")
             else:
                 buf = io.BytesIO()
                 with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -1353,6 +1365,8 @@ def cmd_check(ctx, quiet=False):
         for label, leaked, missing in results:
             print("self-test (%s): %s%s" % (label, "PASS" if not leaked and not missing else "FAIL",
                                             ("; leaked %s" % leaked if leaked else "") + ("; missing %s" % missing if missing else "")))
+        if raw_note:
+            print("  " + raw_note)
         print("audit of blitz-returns: %s" % ("no credential-looking files" if not hits else "FOUND %s" % hits))
     if not ok or hits:
         raise SystemExit("credential check failed; nothing will be copied")

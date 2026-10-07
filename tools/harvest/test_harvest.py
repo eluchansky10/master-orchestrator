@@ -83,7 +83,7 @@ class Fixture:
         write(self.tools / "fleet.py", FAKE_FLEET)
         write(self.tools / "hosts.conf", "\n".join([
             "# name | ssh | account | key | last day | sensitive | max",
-            "agent2|agent2@agents-mac-mini-1|elliot@cybernovaequity.com|token-8b88e8c09b14|-|yes|2",
+            "agent2|agent2@agents-mac-mini-1|elliot@cybernovaequity.com|token-fixture|-|yes|2",
             "macbook|luchanskyelliot@100.116.248.10|elliot@nasarai.com|PENDING|2026-10-01|no|2", ""]))
         self.homes = {"agent2@agents-mac-mini-1": str(self.tmp / "agent2"), "agent1@100.82.254.11": str(self.tmp / "agent1")}
         if macbook_up:
