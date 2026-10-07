@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "blitz-harvest manifest",
+  "description": "blitz-returns/harvest-manifest.json, rewritten by tools/harvest/harvest.py on every plan, scan, copy, push and report. The report HARVEST-<date>.md is the short view of it; history lives in the reports and in copy-ledger.json.",
+  "type": "object",
+  "required": [
+    "harvest",
+    "rows"
+  ],
+  "properties": {
+    "harvest": {
+      "type": "object",
+      "required": [
+        "version",
+        "date",
+        "days",
+        "window_start_utc",
+        "root"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "date": {
+          "type": "string",
+          "description": "YYYY-MM-DD (UTC) of the plan step"
+        },
+        "started_utc": {
+          "type": "string"
+        },
+        "days": {
+          "type": "integer",
+          "minimum": 7,
+          "description": "trailing window; default 8, first real run 14 (PLAN 5.5)"
+        },
+        "window_start_utc": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string",
+          "description": "C:\\Projects\\master-orchestrator"
+        },
+        "scanned_utc": {
+          "type": "string"
+        },
+        "hosts": {
+          "type": "object",
+          "description": "one entry per scanned host (pc, agent2, macbook, agent1); Jjess's Mac mini is never here",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "reachable": {
+                "type": "boolean"
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "home": {
+                "type": "string"
+              },
+              "account_hint": {
+                "type": "string"
+              },
+              "partial": {
+                "type": "boolean",
+                "description": "remote-find.sh did not reach its done line, or the generic find hit its time limit"
+              },
+              "timed_out": {
+                "type": "boolean"
+              },
+              "bad_lines": {
+                "type": "integer"
+              },
+              "exit": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "stderr": {
+                "type": "string"
+              },
+              "elapsed": {
+                "type": "number"
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "error": {
+                "type": "string",
+                "description": "why the host was unreachable"
+              }
+            }
+          }
+        },
+        "tailscale": {
+          "type": "array",
+          "description": "tailscale status rows: name, ip, os, online; listed only, never scanned unless in hosts.conf"
+        },
+        "zips": {
+          "type": "array",
+          "description": "package zips in a Mac's Downloads (names, sizes and dates only)"
+        },
+        "other_hosts": {
+          "type": "object",
+          "description": "light-touch evidence that runs happened on a peer not in hosts.conf (PLAN 3.6); credential lines withheld"
+        },
+        "disk": {
+          "type": "object",
+          "description": "free and needed bytes on the PC drive before copying"
+        },
+        "copied_bytes": {
+          "type": "integer"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "audit": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "credential-like paths found under blitz-returns after the copy; must be empty"
+        },
+        "push": {
+          "type": "object",
+          "properties": {
+            "fleet_pull": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "captured output of fleet.pull()"
+            },
+            "added": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "returns pushed in full"
+            },
+            "pointer": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "restricted returns pushed as pointer stubs"
+            },
+            "skipped": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pushed": {
+              "type": "boolean"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "report": {
+          "type": "string",
+          "description": "path of the HARVEST report written from this manifest"
+        },
+        "sync": {
+          "type": "object",
+          "description": "the cloud-sync zip: path, size, runs included, runs withheld",
+          "properties": {
+            "zip": {
+              "type": "string"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "over_cap": {
+              "type": "array",
+              "description": "runs left out of the zip by the 200 MB cap"
+            }
+          }
+        }
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    }
+  },
+  "$defs": {
+    "row": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "status",
+        "source_doc"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "sprint id or run folder name"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_doc": {
+          "type": "string",
+          "description": "seed:<doc>, a planning doc or prompt path, dispatch-log, returns-repo, thread:<title>, discovered:<host> or pattern:<host>"
+        },
+        "doc_title": {
+          "type": "string"
+        },
+        "title_from_table": {
+          "type": "boolean"
+        },
+        "host_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path_hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "launch_path": {
+          "enum": [
+            "A",
+            "B",
+            null
+          ]
+        },
+        "match_words": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "topic row: folders whose name holds all these words become their own rows"
+        },
+        "topic_row": {
+          "type": "string",
+          "description": "the topic row a folder row was expanded from"
+        },
+        "kind": {
+          "enum": [
+            "planned",
+            "returns-repo",
+            "discovered",
+            "pattern",
+            "pc"
+          ]
+        },
+        "status": {
+          "enum": [
+            "planned",
+            "found",
+            "old",
+            "not_found",
+            "not_found_yet",
+            "not_scanned",
+            "already_returned",
+            "expanded",
+            "confirm",
+            "dropped",
+            "listed"
+          ],
+          "description": "found: matched and inside the window or named by a plan; not_found_yet: its host was unreachable; confirm: pattern score 2-3, Elliot decides; listed: shown in the report, not copied"
+        },
+        "already_returned": {
+          "type": "boolean"
+        },
+        "repo_path": {
+          "type": "string",
+          "description": "path of its RETURN.md in orchestrator-returns"
+        },
+        "host": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "match_reason": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "nfiles": {
+          "type": "integer"
+        },
+        "newest": {
+          "type": "number",
+          "description": "newest file mtime (epoch seconds)"
+        },
+        "recent": {
+          "type": "boolean"
+        },
+        "run_status": {
+          "type": "string",
+          "description": "runner status file, RETURN.md status line, running, partial (no RETURN) or no RETURN"
+        },
+        "return": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "cksum": {
+              "type": "string"
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "head": {
+              "type": "string",
+              "description": "first 20 lines; withheld in the sync copy for restricted rows"
+            },
+            "headings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "return_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessions": {
+          "type": "integer",
+          "description": "Claude/Codex session logs whose cwd is inside this folder (metadata only)"
+        },
+        "push_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "push_signals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "model, intensity, location, timing, shape (PLAN 3.7)"
+        },
+        "sensitive": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "null means unknown, treated as restricted for the cloud copy"
+        },
+        "sensitive_why": {
+          "type": "string"
+        },
+        "copy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "copied, unchanged, pointer (PC run), dry-run (...), over-cap: control files only, refused: disk, error: ..."
+        },
+        "dest": {
+          "type": "string",
+          "description": "path under blitz-returns; a changed run gets a -vN sibling"
+        },
+        "copied_files": {
+          "type": "integer"
+        },
+        "excluded": {
+          "type": "object",
+          "description": "count of members left out per reason (credential, cache, git objects, junk, link, big log)"
+        },
+        "excluded_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "credential-like names left out (names only)"
+        },
+        "copy_warnings": {
+          "type": "string"
+        },
+        "pushed": {
+          "type": "string",
+          "description": "full, pointer, already there, or why not"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
