@@ -541,6 +541,27 @@ class HarvestTest(unittest.TestCase):
         for path, want in cases.items():
             self.assertEqual(harvest.run_root(path, H), want, path)
 
+    def test_10_settle_rename_retries_then_copies(self):
+        src = self.fx.tmp / "settle-src"
+        write(src / "a" / "b.txt", "x\n")
+        os.chmod(src / "a" / "b.txt", 0o444)
+        calls = []
+        real = os.replace
+        def refuse(a, b):
+            calls.append(a)
+            raise PermissionError(5, "Access is denied")
+        harvest.os.replace = refuse
+        try:
+            orig_sleep, harvest.time.sleep = harvest.time.sleep, lambda s: None
+            how = harvest.settle_rename(str(src), str(self.fx.tmp / "settle-dst"), tries=3)
+        finally:
+            harvest.os.replace = real
+            harvest.time.sleep = orig_sleep
+        self.assertEqual(len(calls), 3)
+        self.assertIn("copied into place", how)
+        self.assertTrue((self.fx.tmp / "settle-dst" / "a" / "b.txt").exists())
+        self.assertFalse(src.exists())
+
     def test_8_next_reset(self):
         t = harvest.parse_time("2026-09-30T20:00:00Z")
         self.assertEqual(harvest.iso(harvest.next_reset("elliot@cybernovaequity.com", t)), "2026-10-01 12:00 UTC")

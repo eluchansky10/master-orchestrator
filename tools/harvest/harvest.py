@@ -1340,13 +1340,46 @@ def extract_stream(stream, dest, control_only=False):
     return stats
 
 
+def _clear_readonly(func, p, *exc):
+    """rmtree helper: Windows refuses to delete a read-only file until its read-only bit is cleared."""
+    try:
+        os.chmod(p, 0o700)
+        func(p)
+    except OSError:
+        pass
+
+
+def remove_tree(p):
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(p, onexc=_clear_readonly)
+    else:
+        shutil.rmtree(p, onerror=_clear_readonly)
+
+
+def settle_rename(src, dst, tries=6):
+    """Rename a freshly written folder into place. On Windows a virus scanner or the search indexer can hold a
+    handle on new files for a few seconds ([WinError 5] Access is denied), so retry with backoff, then fall back
+    to copying the tree and removing the original."""
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return "renamed"
+        except PermissionError:
+            if i == tries - 1:
+                break
+            time.sleep(0.5 * 2 ** i)
+    shutil.copytree(src, dst)
+    remove_tree(src)
+    return "copied into place (rename refused)"
+
+
 def copy_folder(ctx, host, path, dest, control_only=False):
     """Stream one remote folder to dest through ssh + tar. The remote side only reads."""
     f = ctx.fleet
     cmd = [f.SSH, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host["ssh"], tar_remote_command(path, control_only)]
     tmp = Path(str(dest) + ".partial")
     if tmp.exists():
-        shutil.rmtree(win_long(tmp))
+        remove_tree(win_long(tmp))
     # stderr goes to a file so a long warning list can never block the stdout stream
     with tempfile.TemporaryFile() as errf, subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf,
                                                            creationflags=getattr(f, "NO_WINDOW", 0)) as proc:
@@ -1361,8 +1394,10 @@ def copy_folder(ctx, host, path, dest, control_only=False):
     if code not in (0, 1):   # bsdtar exits 1 when a file changed while it was read
         raise RuntimeError("tar over ssh exit %s: %s" % (code, err.strip()[-200:]))
     os.makedirs(win_long(tmp), exist_ok=True)
-    os.replace(win_long(tmp), win_long(dest))
+    how = settle_rename(win_long(tmp), win_long(dest))
     stats["warnings"] = err.strip()[-200:] if err.strip() else ""
+    if how != "renamed":
+        stats["warnings"] = (stats["warnings"] + "; " if stats["warnings"] else "") + how
     return stats
 
 
