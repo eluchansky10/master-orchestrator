@@ -37,6 +37,8 @@ Design record: `/mnt/project-files/master-orchestrator/skills/blitz-harvest/PLAN
 
 **Pattern-recognized pushes** (`scan`): any run folder or session no plan names is scored on five signals: model (latest Fable or Opus), intensity (high/xhigh/max effort, Ultracode, Workflow or several subagents, `/goal`, `/loop`, over 2 hours, `MAX_HOURS`), location (a Mac or a sprint account), timing (started within 48 h before that account's reset), shape (state.json, PROGRESS.md, RETURN.md, MANIFEST.md, GOAL.txt, SPRINT.md). Score 4 or 5 is harvested; 2 or 3 is listed to confirm.
 
+**Where a run can be.** On a Mac, only inside the home folder: `~/orchestrator/sprints/<id>` (and `sprints/_aborted/<id>`), `~/Downloads/<package>`, Claude Desktop scratch workspaces, and any home folder holding run control files. Never `~/gt` (Gas Town, agent2's always-on agent office), home dot folders, `~/Library`, temp or system folders. On the PC, only under `C:\Projects`: `<project>\work\<lane>\<child>`, `...\loops\<child>`, or a dated run folder; `_control`, dot folders and `master-orchestrator` itself are never runs, and `.claude\worktrees` counts as its project. Latest-model sessions scoring 4+ whose folder is no run (home, temp) are listed in section 4 as loose sessions, with nothing to copy.
+
 **Window**: folders and sessions newer than `--days`; a planned run is never dropped for age.
 
 ## Hosts
@@ -46,7 +48,7 @@ From `tools\hosts.conf` (rows with an 8th field `yes` are harvest-only; `fleet.p
 ## Running on the PC (the default)
 
 1. `harvest.py all`. On a first run, or after adding a host, do `plan`, `scan`, `copy --dry-run`, `report` first and check the copy list and sizes.
-2. Open the newest `blitz-returns\HARVEST-<date>.md`. Section 1 "Needed from Elliot" first: tell him each line, one line each.
+2. Open the newest `blitz-returns\HARVEST-<date>.md` (at most 150 lines: 1 Needed from Elliot, 2 Found and copied, 3 Not found anywhere, 4 Discovered runs and pushes to confirm, 5 Excluded for privacy, 6 Possible other hosts, 7 Pushed). Section 1 first: tell him each line, one line each. Pushes to confirm are never in section 1; they are a question, not a blocker.
 3. Section 4 pushes to confirm: ask Elliot once, in a short list, harvest or drop; record with `confirm` / `drop`; run `all` again.
 4. The report's sync line says the Project copy was not made; run this skill from the Project for that.
 
@@ -61,9 +63,9 @@ From `tools\hosts.conf` (rows with an 8th field `yes` are harvest-only; `fleet.p
 
 ## Restricted material
 
-Screened by name only, in order: runner `SENSITIVE=1`; the plan or prompt marks it restricted; strong words in the folder or control-file names (lawsuit, litigation, Apeira, Toptal, Pave, CureIS, deposition, Colombia, Playa); a package README/MANIFEST marked Confidential or "Sensitive project"; strong words in headings; "Overall: normal" in a MANIFEST clears soft words; soft words (client, NDA, family, personal debt, WhatsApp, messages export, photos). Output bodies are never read. A run that could not be read counts as restricted for the Project.
+Screened by name only, in order: runner `SENSITIVE=1`; the plan or prompt marks it restricted; on the PC, the project's `.project.json` `sensitivity` is anything but normal; strong words in the folder or control-file names (lawsuit, litigation, Apeira, Toptal, Pave, CureIS, deposition, Colombia, Playa, tax, taxes); a package README/MANIFEST marked Confidential or "Sensitive project"; strong words in headings; "Overall: normal" in a MANIFEST clears soft words; soft words (client, NDA, family, personal debt, WhatsApp, messages export, photos). Output bodies are never read. A run that could not be read counts as restricted for the Project. One run has one answer: when any part of it is restricted (its returns copy, a `-try1` or `-v2` sibling, a PC copy), all of it is.
 
-Restricted runs are copied to the PC only and go to the returns repo as pointer stubs; never into Project files or memory, never to another host. Section 5 of the report names each one with the reason.
+Restricted runs are copied to the PC only and go to the returns repo as pointer stubs; never into Project files or memory, never to another host. Section 5 of the report names each one with the reason; everywhere else in the report a restricted row is anonymous ("a restricted run on agent2, named in section 5").
 
 ## Rules this skill never breaks
 
