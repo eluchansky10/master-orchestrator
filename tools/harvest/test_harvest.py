@@ -7,9 +7,11 @@ Fakes: a fleet.py with the pre-patch load_hosts() (so patch_fleet.py is tested t
 runs the remote command locally with HOME set to a fixture folder per host. A host missing from the map
 behaves like an unreachable Mac.
 """
+import contextlib
 import io
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -529,6 +531,64 @@ class HarvestTest(unittest.TestCase):
             man = json.loads(z.read("harvest-manifest.json"))
             law = next(x for x in man["rows"] if x["id"] == "lawsuit-damages-L9-2026-10-01")
             self.assertEqual(law.get("return", "[withheld: restricted]"), "[withheld: restricted]")
+        finally:
+            fx.close()
+
+    @unittest.skipIf(os.name == "nt", "end-to-end fixture needs a POSIX sh as the fake Mac")
+    def test_12_sync_cap_parts_and_unpack(self):
+        import zipfile
+        fx = Fixture(macbook_up=True)
+        try:
+            fx.run("all", "--days", "14")
+            out = fx.root / "blitz-returns"
+            l7 = "agent2/L7-nasarai-devpush-2026-09-30"
+            (out / l7 / "big.bin").write_bytes(os.urandom(300 * 1024))   # L7 is now the one folder over a 0.2 MB cap
+            fx.run("sync", "--cap-mb", "0.2", "--part-mb", "0.005")
+            sy = fx.manifest()["harvest"]["sync"]
+            self.assertEqual(sy["over_cap"], [l7])
+            self.assertGreater(len(sy["parts"]), 1, sy)
+            self.assertTrue(all(Path(p).name.startswith("sync-") and "of%d.zip" % len(sy["parts"]) in p for p in sy["parts"]))
+            names = set()
+            for p in sy["parts"]:
+                nl = zipfile.ZipFile(p).namelist()
+                self.assertIn("harvest-manifest.json", nl)
+                names |= set(nl)
+            self.assertIn(l7 + "/RETURN.md", names)                  # control files of the over-cap folder
+            self.assertNotIn(l7 + "/big.bin", names)
+            self.assertTrue(any(n.startswith("macbook/nasarai-marketing-q4-revenue-sprint-2026-09-30/") for n in names))
+            self.assertTrue(any(harvest.REPORT_FILE.match(n) for n in names), names)
+            self.assertFalse([n for n in names if any(w in n for w in ("colombia", "lawsuit", "taxes", "jev-model", "token"))
+                              or n.startswith("pc/") or posixpath.basename(n).startswith(".env")], names)
+            # a second sync sends nothing that is already in the Project
+            fx.run("sync", "--cap-mb", "0.2", "--part-mb", "0.005")
+            sy2 = fx.manifest()["harvest"]["sync"]
+            self.assertIn("macbook/nasarai-marketing-q4-revenue-sprint-2026-09-30", sy2["already_synced"])
+            self.assertEqual(len(sy2["parts"]), 1)
+            self.assertEqual(sorted(zipfile.ZipFile(sy2["parts"][0]).namelist()), ["SYNC-NOTES.md", "harvest-manifest.json"])
+            # unpack: allowed folders land; a restricted run, a PC pointer, a credential file and a traversal are refused
+            evil = fx.tmp / "evil.zip"
+            with zipfile.ZipFile(evil, "w") as z:
+                z.writestr("macbook/colombia-project-playa-2026-10-01/README.md", "restricted")
+                z.writestr("../escape.txt", "x")
+                z.writestr(l7 + "/.env", "SECRET=1")
+                z.writestr("pc/L9-litigation-ledger-2026-09-30/RUNS-HERE.md", "x")
+            proj = fx.tmp / "project" / "blitz-returns"
+            with contextlib.redirect_stdout(io.StringIO()):
+                res = harvest.cmd_unpack([str(p) for p in sy["parts"]] + [str(evil)], proj)
+            self.assertTrue((proj / l7 / "RETURN.md").exists())
+            self.assertFalse((proj / l7 / "big.bin").exists())
+            self.assertTrue((proj / "harvest-manifest.json").exists())
+            self.assertTrue((proj / "macbook" / "nasarai-marketing-q4-revenue-sprint-2026-09-30").is_dir())
+            self.assertFalse((proj / "macbook" / "colombia-project-playa-2026-10-01").exists())
+            self.assertFalse((fx.tmp / "project" / "escape.txt").exists())
+            self.assertFalse((proj / l7 / ".env").exists())
+            self.assertFalse((proj / "pc").exists())
+            self.assertEqual(len(res["refused"]), 4, res["refused"])
+            idx = harvest.index_lines(res["manifest"])
+            self.assertTrue(any("colombia-project-playa-2026-10-01" in x and "PC only (restricted)" in x for x in idx), idx)
+            self.assertTrue(any("L7-nasarai-devpush-2026-09-30" in x and "control files only" in x for x in idx), idx)
+            self.assertTrue(any("nasarai-marketing-q4" in x and "| blitz-returns/macbook/" in x for x in idx), idx)
+            self.assertLess(len("\n".join(idx).encode()), 4096)
         finally:
             fx.close()
 

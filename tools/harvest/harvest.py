@@ -15,6 +15,8 @@ Commands
   check             credential-exclusion self-test, then an audit of blitz-returns\ for credential files
   seed DOC...       turn planning docs into a seed file for plan (the cloud thread runs this on Project docs)
   sync              zip the report, a redacted manifest and every non-restricted copied run for the Project
+                    (--cap-mb 200, smallest first; --part-mb 24 per zip part; --resend to include folders sent before)
+  unpack ZIP... --to DIR   cloud side: unpack sync parts into the Project's blitz-returns (allowed folders only)
   confirm|drop NAME pattern-recognized pushes to confirm: harvest them from the next run on, or stop listing them
 
 Options: --days N (trailing window, default 8, minimum 7)  --host NAME (repeatable)  --slow (300 s per host)
@@ -1981,51 +1983,209 @@ def cmd_choose(ctx, verdict, names):
     print("%s: %s (takes effect at the next scan)" % (verdict, ", ".join(names)))
 
 
-def cmd_sync(ctx):
-    man = ctx.load()
-    rows, hv = man["rows"], man["harvest"]
-    date = hv.get("date") or ctx.started.strftime("%Y-%m-%d")
-    zpath = ctx.out / ("sync-%s.zip" % date)
-    n = 1
-    while zpath.exists():
-        n += 1
-        zpath = ctx.out / ("sync-%s-%d.zip" % (date, n))
+SYNC_LEDGER = "sync-ledger.json"
+REPORT_FILE = re.compile(r"^HARVEST-\d{4}-\d{2}-\d{2}(?:-\d+)?\.md$")   # real reports only, never -dryrun
+SYNC_TOP = {"harvest-manifest.json", "SYNC-NOTES.md"}
+
+
+def project_dests(rows):
+    """Copied folders the Project may hold: every row naming the folder is sensitive False and none is a PC pointer."""
+    ok, bad = {}, set()
+    for r in rows:
+        d = r.get("dest")
+        if not d:
+            continue
+        if r.get("sensitive") is not False or r.get("host") == "pc":
+            bad.add(d)
+        else:
+            ok.setdefault(d, r)
+    return {d: r for d, r in ok.items() if d not in bad}
+
+
+def walk_files(src):
+    """(relative path with /, full path, size) of every file under src, credential-named files left out."""
+    out = []
+    top = win_long(src)
+    for dirpath, dirnames, filenames in os.walk(top):
+        dirnames[:] = [d for d in dirnames if not is_secret(d + "/x")]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, top).replace("\\", "/")
+            if is_secret(rel) or os.path.islink(full):
+                continue
+            out.append((rel, full, os.path.getsize(full)))
+    return sorted(out)
+
+
+def redacted_manifest(man):
     red = json.loads(json.dumps(man))
     for r in red["rows"]:
         if r.get("sensitive") is not False:
             for k in REDACT_KEYS:
-                if k in r and k not in ("path",):
+                if k in r and k != "path":
                     r[k] = "[withheld: restricted]"
-            r["id"] = r["id"]
-    budget, used, listed = PROJECT_CAP, 0, []
-    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-        rep = hv.get("report")
-        if rep and Path(rep).exists():
-            z.write(rep, Path(rep).name)
-        z.writestr("harvest-manifest.json", json.dumps(red, indent=1))
-        seen = set()
-        for r in rows:
-            d = r.get("dest")
-            if not d or d in seen or r.get("sensitive") is not False or r.get("host") == "pc":
-                continue
-            seen.add(d)
-            src = ctx.out / d
-            if not src.exists():
-                continue
-            files = [f for f in src.rglob("*") if f.is_file() and not is_secret(str(f.relative_to(src)))]
-            size = sum(f.stat().st_size for f in files)
-            if used + size > budget:
-                files = [f for f in files if f.name in CONTROL_NAMES]
-                listed.append("%s (%s): control files only, over the Project cap" % (d, human(size)))
-            for f in files:
-                z.write(f, "%s/%s" % (d, str(f.relative_to(src)).replace("\\", "/")))
-                used += f.stat().st_size
-        z.writestr("SYNC-NOTES.md", "\n".join(["# Sync %s" % date, "", "Restricted and unclassified runs are not in this zip.",
-                                               "Over the 200 MB cap (control files only):"] + (listed or ["none"])) + "\n")
-    hv["sync"] = {"zip": str(zpath), "bytes": zpath.stat().st_size, "over_cap": listed}
+    return red
+
+
+def cmd_sync(ctx, cap_mb=200, part_mb=24, resend=False):
+    """Zip what the Project may hold (PLAN 8.2): the real reports, a redacted manifest and every copied folder whose
+    rows are all sensitive False, smallest first up to the cap; a folder that does not fit sends its control files.
+    A folder already sent unchanged by an earlier sync is skipped unless --resend. Parts stay under --part-mb."""
+    man = ctx.load()
+    rows, hv = man["rows"], man["harvest"]
+    date = hv.get("date") or ctx.started.strftime("%Y-%m-%d")
+    stem, n = "sync-%s" % date, 1
+    while any(ctx.out.glob(stem + "*.zip")):
+        n += 1
+        stem = "sync-%s-%d" % (date, n)
+    sent = load_json(ctx.out / SYNC_LEDGER, {})
+    budget, part_cap = int(cap_mb * 1024 ** 2), int(part_mb * 1024 ** 2)
+    plan, over, skipped, used = [], [], [], 0
+    folders = []
+    for d, r in project_dests(rows).items():
+        src = ctx.out / d
+        if not src.is_dir():
+            continue
+        files = walk_files(src)
+        size = sum(f[2] for f in files)
+        sig = "%d files, %d bytes, newest %s" % (len(files), size, max((int(os.path.getmtime(f[1])) for f in files), default=0))
+        folders.append((size, d, files, sig))
+    for size, d, files, sig in sorted(folders):
+        if not resend and (sent.get(d) or {}).get("sig") == sig:
+            skipped.append(d)
+            continue
+        full = used + size <= budget
+        if not full:
+            files = [f for f in files if posixpath.basename(f[0]) in CONTROL_NAMES]
+            over.append((d, size))
+        plan += [("%s/%s" % (d, rel), path, sz) for rel, path, sz in files]
+        used += sum(f[2] for f in files)
+        sent[d] = {"sig": sig, "zip": stem, "utc": now_utc().isoformat(timespec="seconds"), "full": full}
+    head = [(f.name, str(f), f.stat().st_size) for f in sorted(ctx.out.glob("HARVEST-*.md")) if REPORT_FILE.match(f.name)
+            and (resend or (sent.get("reports") or {}).get(f.name) != f.stat().st_size)]
+    notes = "\n".join(["# Sync %s" % stem[5:], "",
+                       "Made by harvest.py sync on %s. Unpack with `harvest.py unpack <every part> --to <Project blitz-returns>`." % (
+                           now_utc().strftime("%Y-%m-%d %H:%M UTC")),
+                       "Restricted, unclassified and PC-only runs are never in this zip.", "",
+                       "Over the %g MB cap (control files only; the full copy is on the PC):" % cap_mb] +
+                      (["- %s (%s)" % (d, human(sz)) for d, sz in over] or ["- none"]) +
+                      ["", "Already in the Project from an earlier sync, unchanged since (not resent):"] +
+                      (["- " + d for d in skipped] or ["- none"])) + "\n"
+    hv["sync"] = {"stem": stem, "over_cap": [d for d, sz in over], "already_synced": skipped, "cap_mb": cap_mb,
+                  "part_mb": part_mb, "content_bytes": used}
+    manifest = json.dumps(redacted_manifest(man), indent=1)
+    parts, cur, cur_size = [], [], 0
+    for item in head + plan:
+        if cur and cur_size + item[2] > part_cap:
+            parts.append(cur)
+            cur, cur_size = [], 0
+        cur.append(item)
+        cur_size += item[2]
+    parts.append(cur)
+    total = len(parts)
+    paths = []
+    for i, items in enumerate(parts, 1):
+        zp = ctx.out / ("%s.zip" % stem if total == 1 else "%s-part%dof%d.zip" % (stem, i, total))
+        with zipfile.ZipFile(win_long(zp), "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
+            z.writestr("harvest-manifest.json", manifest)
+            z.writestr("SYNC-NOTES.md", notes)
+            for arc, full, sz in items:
+                z.write(full, arc)
+        paths.append(zp)
+    sent["reports"] = dict(sent.get("reports") or {}, **{name: sz for name, full, sz in head})
+    save_json(ctx.out / SYNC_LEDGER, sent)
+    sizes = [p.stat().st_size for p in paths]
+    hv["sync"].update({"zip": str(paths[0]), "parts": [str(p) for p in paths], "bytes": sum(sizes)})
     ctx.save(man)
-    print("sync: %s (%s, %d folders over the cap)" % (zpath, human(zpath.stat().st_size), len(listed)))
-    return zpath
+    print("sync: %d part%s, %s zipped (%s of run files), %d folder%s over the cap, %d already in the Project" % (
+        total, "" if total == 1 else "s", human(sum(sizes)), human(used), len(over), "" if len(over) == 1 else "s", len(skipped)))
+    for p, sz in zip(paths, sizes):
+        print("  %s (%s)" % (p, human(sz)))
+    return paths
+
+
+def cmd_unpack(zips, to):
+    """Cloud side of the sync: unpack every part into the Project's blitz-returns folder. Only a real report, the
+    manifest, SYNC-NOTES.md and files inside a folder that the zip's own manifest marks sensitive False (all rows, no
+    PC pointer) land; absolute paths, .., links and credential-named files are refused and listed."""
+    to = Path(to)
+    zfs = [zipfile.ZipFile(z) for z in zips]
+    man = None
+    for zf in zfs:
+        if "harvest-manifest.json" in zf.namelist():
+            man = json.loads(zf.read("harvest-manifest.json"))
+            break
+    if man is None:
+        raise SystemExit("unpack: no harvest-manifest.json in %s" % ", ".join(map(str, zips)))
+    allowed = set(project_dests(man["rows"]))
+    root = os.path.realpath(to)
+    wrote, refused, per = 0, [], {}
+    for zf in zfs:
+        for m in zf.infolist():
+            name = m.filename
+            if name.endswith("/"):
+                continue
+            parts = name.split("/")
+            why = None
+            if name.startswith("/") or "\\" in name or ":" in name or ".." in parts or "" in parts or "." in parts:
+                why = "unsafe path"
+            elif (m.external_attr >> 16) & 0o170000 == 0o120000:
+                why = "a link"
+            elif is_secret(name):
+                why = "credential-like name"
+            elif len(parts) == 1:
+                if not (REPORT_FILE.match(name) or name in SYNC_TOP):
+                    why = "not a report, manifest or notes file"
+            else:
+                d = next((a for a in allowed if name.startswith(a + "/")), None)
+                if not d:
+                    why = "not inside a folder the manifest allows in the Project"
+            if why:
+                refused.append("%s: %s" % (name, why))
+                continue
+            dest = os.path.realpath(os.path.join(root, *parts))
+            if not dest.startswith(root + os.sep):
+                refused.append("%s: outside the target folder" % name)
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(m) as fin, open(dest, "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+            wrote += 1
+            if len(parts) > 1:
+                key = "/".join(parts[:2])
+                c = per.setdefault(key, [0, 0])
+                c[0] += 1
+                c[1] += m.file_size
+    print("unpack: %d files into %s; %d refused" % (wrote, to, len(refused)))
+    for k, (nf, nb) in sorted(per.items()):
+        print("  %s: %d files, %s" % (k, nf, human(nb)))
+    for x in refused[:40]:
+        print("  refused " + x)
+    return {"wrote": wrote, "refused": refused, "folders": per, "manifest": man}
+
+
+def index_lines(man, project_root="blitz-returns"):
+    """One line per harvested run for the memory file blitz-harvest-index (PLAN 8.4)."""
+    allowed = project_dests(man["rows"])
+    over = set((man["harvest"].get("sync") or {}).get("over_cap") or [])
+    date = man["harvest"].get("date", "")
+    out, seen = [], set()
+    for r in man["rows"]:
+        d = r.get("dest")
+        if not d or d in seen:
+            continue
+        seen.add(d)
+        if r.get("host") == "pc":
+            where = "PC only (runs on the PC; pointer)"
+        elif d not in allowed:
+            where = "PC only (restricted)"
+        elif d in over:
+            where = "%s/%s (control files only; over the cap)" % (project_root, d)
+        else:
+            where = "%s/%s" % (project_root, d)
+        out.append("- %s | %s | blitz-returns\\%s | %s | %s | %s" % (
+            r.get("id") or d, r.get("host"), d.replace("/", "\\"), where, r.get("run_status") or r.get("status"), date))
+    return out
 
 
 def cmd_find(ctx, named_paths):
@@ -2075,7 +2235,7 @@ def cmd_find(ctx, named_paths):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["plan", "scan", "copy", "push", "report", "all", "check", "seed", "sync", "confirm",
-                                    "drop", "find"])
+                                    "drop", "find", "unpack"])
     ap.add_argument("docs", nargs="*", help="seed: planning docs or folders; confirm/drop: folder names or paths; "
                                            "find: extra remote paths to describe")
     ap.add_argument("--days", type=int, default=8)
@@ -2086,10 +2246,19 @@ def main(argv=None):
     ap.add_argument("--push-restricted", choices=["pointer", "full"], default="pointer")
     ap.add_argument("--out", help="seed: output file")
     ap.add_argument("--extra", help="seed: extra rows (JSON list), e.g. runs named only in Project threads")
+    ap.add_argument("--cap-mb", type=float, default=PROJECT_CAP / 1024 ** 2, help="sync: Project copy cap per harvest")
+    ap.add_argument("--part-mb", type=float, default=24, help="sync: largest zip part")
+    ap.add_argument("--resend", action="store_true", help="sync: include folders an earlier sync already sent")
+    ap.add_argument("--to", help="unpack: the Project's blitz-returns folder")
     a = ap.parse_args(argv)
     ctx = Ctx(a.root, a.days, a.slow, a.host, a.dry_run, a.push_restricted)
     if a.days < 7:
         print("note: --days is at least 7 (section 5.5); using 7")
+    if a.cmd == "unpack":
+        res = cmd_unpack(a.docs, a.to or ".")
+        print("index:")
+        print("\n".join(index_lines(res["manifest"])))
+        return res
     if a.cmd == "seed":
         return cmd_seed(ctx, a.docs, a.out or "seed-%s.json" % ctx.started.strftime("%Y-%m-%d"), a.extra)
     ctx.out.mkdir(parents=True, exist_ok=True)
@@ -2108,7 +2277,7 @@ def main(argv=None):
     elif a.cmd == "check":
         cmd_check(ctx)
     elif a.cmd == "sync":
-        cmd_sync(ctx)
+        cmd_sync(ctx, a.cap_mb, a.part_mb, a.resend)
     elif a.cmd in ("confirm", "drop"):
         cmd_choose(ctx, a.cmd, a.docs)
     elif a.cmd == "find":
