@@ -439,6 +439,7 @@ class HarvestTest(unittest.TestCase):
         for rid in ("lawsuit-damages-L9-2026-10-01", "lawsuit-loops-2026-10-01", "colombia-project-playa-2026-10-01",
                     "L9-litigation-ledger-2026-09-30", "jev-model-2026-09-30-try1"):
             self.assertIn(rid, excluded)
+        self.assertIn("taxes-agent2", excluded)            # restricted, nothing to copy, still named here
         # restricted names never appear in section 4; sections 5 to 7 are always there
         self.assertNotIn("taxes-agent2", sec4)
         self.assertIn("## 7. Pushed", rep)

@@ -1271,10 +1271,11 @@ def tar_remote_command(path, control_only=False):
     excl = " ".join(shlex.quote("--exclude=" + e) for e in TAR_EXCLUDES)
     if control_only:
         inc = " ".join(shlex.quote("%s/%s" % (name, c)) for c in sorted(CONTROL_NAMES))
-        return "cd %s && find %s -maxdepth 4 -type f \\( %s \\) -print | tar -czf - %s -T -" % (
+        return "cd %s && find %s -maxdepth 4 -type f \\( %s \\) -print | COPYFILE_DISABLE=1 tar -czf - %s -T -" % (
             shlex.quote(parent), shlex.quote(name),
             " -o ".join("-name %s" % shlex.quote(c) for c in sorted(CONTROL_NAMES)), excl)
-    return "cd %s && tar -czf - %s %s" % (shlex.quote(parent), excl, shlex.quote(name))
+    # COPYFILE_DISABLE: macOS tar would add a ._ AppleDouble entry for every file with extended attributes
+    return "cd %s && COPYFILE_DISABLE=1 tar -czf - %s %s" % (shlex.quote(parent), excl, shlex.quote(name))
 
 
 def member_allowed(rel, size, control_only):
@@ -1844,7 +1845,7 @@ def cmd_report(ctx, path=None):
     # 5. excluded for privacy (reproduced verbatim in the cloud reply): every restricted item by name, and every
     # copied item whose sensitivity is unknown
     S5 = ["## 5. Excluded for privacy", ""]
-    excl = [r for r in rows if (restricted(r) and (r.get("status") in ("found", "confirm", "pointer") or r.get("kind") == "planned"))
+    excl = [r for r in rows if (restricted(r) and (r.get("status") in ("found", "confirm", "pointer", "listed") or r.get("kind") == "planned"))
             or (r.get("sensitive") is not False and r.get("status") == "found")]
     for r in excl:
         if r.get("dest") and r.get("host") != "pc":
@@ -1858,6 +1859,9 @@ def cmd_report(ctx, path=None):
             done = "A push to confirm; not copied. If confirmed it stays PC-only."
         elif r.get("status") == "pointer":
             done = "Runs on the PC; pointer only; not synced to the Project."
+        elif r.get("status") == "listed":
+            done = ("Nothing copied (%s); not synced to the Project." % r["note"]) if r.get("note") else \
+                   "Listed only; nothing copied; not synced to the Project."
         else:
             done = "Not copied; not synced to the Project."
         why = r.get("sensitive_why") or "restricted in its plan (%s)" % cell(r.get("source_doc") or "", 50)
