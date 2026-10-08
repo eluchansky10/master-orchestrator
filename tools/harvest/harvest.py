@@ -1620,6 +1620,11 @@ def git(ctx, *args, check=True):
     return subprocess.run(["git", "-C", str(ctx.returns)] + list(args), capture_output=True, text=True, check=check)
 
 
+HARVESTED_MARK = ".harvested"
+HARVESTED_TEXT = ("blitz-harvest writes this folder's RETURN.md from the run folder itself; fleet.py pull leaves it alone.\n")
+HARVESTED_LINE = re.compile(r"(?m)^6\. Harvested: .*$")
+
+
 def cmd_push(ctx):
     man = ctx.load()
     rows = man["rows"]
@@ -1669,13 +1674,21 @@ def cmd_push(ctx):
         else:
             kind = "full"
         cur = (target / "RETURN.md").read_text(encoding="utf-8", errors="replace") if (target / "RETURN.md").exists() else None
-        if cur == text:
+        if cur is not None and kind == "pointer" and cur.startswith("# RETURN (pointer)") and \
+                HARVESTED_LINE.sub("", cur) == HARVESTED_LINE.sub("", text):
+            text = cur   # same pointer; keep its first harvest time so a re-run commits nothing
+        marked = (target / HARVESTED_MARK).exists()
+        if cur == text and marked:
             continue
-        if cur is not None and kind == "pointer" and not cur.startswith("# RETURN (pointer)"):
+        if cur is not None and cur != text and kind == "pointer" and not cur.startswith("# RETURN (pointer)"):
             res["skipped"].append("%s: repo already holds a return; pointer not written over it" % rid)
             continue
         target.mkdir(parents=True, exist_ok=True)
-        (target / "RETURN.md").write_text(text, encoding="utf-8")
+        if cur != text:
+            (target / "RETURN.md").write_bytes(text.encode("utf-8"))
+        # one owner per return: fleet.py pull (patched) leaves a folder with this marker alone, so the runner's
+        # stub and the run folder's own RETURN.md stop overwriting each other on every run
+        (target / HARVESTED_MARK).write_bytes(HARVESTED_TEXT.encode("utf-8"))
         if not (target / "host").exists():
             (target / "host").write_text(r["host"] + "\n", encoding="utf-8")
         added.append("%s/RETURN.md" % rid)

@@ -8,9 +8,11 @@ dispatches to them". fleet.py's load_hosts() reads fields 0 to 6 only, so this p
      touch them;
   2. appends the agent1 and pc rows to hosts.conf;
   3. makes pull() skip anything in a host's returns folder that is not a folder (macOS AppleDouble `._<id>` files
-     crashed it on Windows with WinError 267), and asks the Mac's tar not to add such files.
-Both files are backed up first (fleet.py.bak-<date>, hosts.conf.bak-<date>; an existing backup is never
-overwritten) and keep LF line endings. Running it again changes nothing, except that it restores LF if an earlier
+     crashed it on Windows with WinError 267), and asks the Mac's tar not to add such files;
+  4. makes pull() leave a returns folder alone when it holds a `.harvested` marker: the harvest wrote that
+     RETURN.md from the run folder itself, and without the marker pull put the runner's stub back on every run.
+Both files are backed up first, once per run that changes them (fleet.py.bak-<date>, hosts.conf.bak-<date>; an
+existing backup is never overwritten) and keep LF line endings. Running it again changes nothing, except that it restores LF if an earlier
 run left CRLF behind.
 
 Usage: C:\Python313\python.exe C:\Projects\master-orchestrator\tools\harvest\patch_fleet.py [--tools DIR]
@@ -65,6 +67,13 @@ PULL_LOOP_NEW = '''            for d in (src_root.iterdir() if src_root.exists()
 PULL_TAR_OLD = '''ssh_bytes(h, "cd ~/orchestrator && tar -czf - returns")'''
 PULL_TAR_NEW = '''ssh_bytes(h, "cd ~/orchestrator && COPYFILE_DISABLE=1 tar -czf - returns")'''
 
+PULL_SKIP_OLD = '''                if dest.exists() and (done in ("DONE", "MOVED") or (dest / ".ingested").exists()):
+                    continue  # already ingested; ingestion may have edited it
+'''
+PULL_SKIP_NEW = PULL_SKIP_OLD + '''                if (dest / ".harvested").exists():
+                    continue  # blitz-harvest owns this return (the run folder's own RETURN.md); never overwrite it
+'''
+
 HOST_LINES = [
     "# Optional 8th field: harvest_only. Rows with \"yes\" are read only by tools\\harvest\\harvest.py (blitz-harvest);",
     "# fleet.py skips them, so they never get caps reads, sprints or pulls.",
@@ -108,27 +117,41 @@ def main():
     for f in (fleet_py, hosts):
         repair_eol(f)
     src = read(fleet_py)
+    baks = []
+
+    def fleet_backup():
+        if not baks:
+            baks.append(backup(fleet_py, stamp))
+        return baks[0]
+
     if NEW in src:
         print("fleet.py: already patched")
     elif OLD in src:
-        name = backup(fleet_py, stamp)
+        name = fleet_backup()
         src = src.replace(OLD, NEW)
         write(fleet_py, src)
         print("fleet.py: load_hosts() now skips harvest-only rows (backup %s)" % name)
     else:
         sys.exit("fleet.py: load_hosts() is not the expected text; not changed. Patch by hand.")
-    todo = [(o, n) for o, n in ((PULL_LOOP_OLD, PULL_LOOP_NEW), (PULL_TAR_OLD, PULL_TAR_NEW)) if n not in src]
-    if not todo:
-        print("fleet.py: pull() already skips stray files")
-    elif all(o in src for o, n in todo):
-        name = backup(fleet_py, stamp)
-        for o, n in todo:
-            src = src.replace(o, n)
-        compile(src, str(fleet_py), "exec")
-        write(fleet_py, src)
-        print("fleet.py: pull() now skips stray files such as ._<id> (backup %s)" % name)
-    else:
-        print("fleet.py: pull() is not the expected text; left as is (its ._ crash stays until patched by hand)")
+    for what, pairs, fail in (
+            ("skips stray files such as ._<id>", ((PULL_LOOP_OLD, PULL_LOOP_NEW), (PULL_TAR_OLD, PULL_TAR_NEW)),
+             "its ._ crash stays until patched by hand"),
+            ("leaves returns the harvest owns (.harvested) alone", ((PULL_SKIP_OLD, PULL_SKIP_NEW),),
+             "pull and the harvest keep rewriting each other's RETURN.md")):
+        todo = [(o, n) for o, n in pairs if n not in src]
+        if not todo:
+            print("fleet.py: pull() already %s" % what)
+        elif all(o in src for o, n in todo):
+            name = fleet_backup()
+            new_src = src
+            for o, n in todo:
+                new_src = new_src.replace(o, n)
+            compile(new_src, str(fleet_py), "exec")
+            write(fleet_py, new_src)
+            src = new_src
+            print("fleet.py: pull() now %s (backup %s)" % (what, name))
+        else:
+            print("fleet.py: pull() is not the expected text; left as is (%s)" % fail)
     conf = read(hosts)
     missing = [ln for ln in HOST_LINES if ln not in conf]
     if missing:

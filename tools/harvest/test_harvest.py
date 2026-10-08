@@ -342,6 +342,8 @@ class HarvestTest(unittest.TestCase):
             "            tf.extractall(tmp, filter='data')\n"
             "            src_root = Path(tmp) / 'returns'\n"
             + patch_fleet.PULL_LOOP_OLD +
+            "                done = ''\n"
+            + patch_fleet.PULL_SKIP_OLD +
             "                print(dest)\n")
         write(tools / "fleet.py", FAKE_FLEET.replace("\ndef pull():\n    PULLED.append(1)\n    print(\"no new returns\")\n", "") + pull_src)
         write(tools / "hosts.conf", "agent2|agent2@agents-mac-mini-1|a|-|-|yes|2\n")
@@ -354,10 +356,12 @@ class HarvestTest(unittest.TestCase):
         text = (tools / "fleet.py").read_text()
         self.assertIn(patch_fleet.PULL_LOOP_NEW, text)
         self.assertIn("COPYFILE_DISABLE=1 tar -czf - returns", text)
+        self.assertIn(patch_fleet.PULL_SKIP_NEW, text)
         self.assertIn("pull() already skips stray files", o.getvalue())
+        self.assertIn("pull() already leaves returns the harvest owns (.harvested) alone", o.getvalue())
         compile(text, "fleet.py", "exec")
         baks = sorted(p.name for p in tools.glob("fleet.py.bak-*"))
-        self.assertEqual(len(baks), 3, baks)          # the day's first backup was kept, not overwritten
+        self.assertEqual(len(baks), 2, baks)          # one backup per changing run; the day's first was kept
         self.assertIn("first backup", (tools / baks[0]).read_text())
 
     def test_2_check_blocks_credentials(self):
@@ -509,6 +513,11 @@ class HarvestTest(unittest.TestCase):
             # a discovered run the first harvest copied and pushed (here as a pointer) stays on the copy path
             try1 = next(r for r in m2["rows"] if r["id"] == "jev-model-2026-09-30-try1")
             self.assertEqual(try1.get("copy"), "unchanged", try1)
+            # nor does it commit to the returns repo: same returns, and a pointer keeps its first harvest time
+            self.assertIsNone(m2["harvest"]["push"]["commit"], m2["harvest"]["push"])
+            rc = fx.root / "returns"
+            pushed = [d for d in rc.iterdir() if (d / ".harvested").exists()]
+            self.assertTrue(pushed, list(rc.iterdir()))
             rep = Path(m2["harvest"]["report"]).read_text(encoding="utf-8")
             first = rep.split("## 1. Needed from Elliot")[1].split("## 2.")[0].strip()
             self.assertEqual(first, "Nothing.", rep)
