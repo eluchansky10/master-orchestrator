@@ -325,6 +325,39 @@ class HarvestTest(unittest.TestCase):
         self.assertEqual([h["name"] for h in fleet.load_hosts()], ["agent2", "macbook"])
         self.assertEqual([h["name"] for h in fleet.load_hosts(harvest=True)], ["agent2", "macbook", "agent1", "pc"])
 
+    def test_11_patch_fleet_pull_skips_stray_files(self):
+        tools = self.fx.tmp / "pull-tools"
+        pull_src = (
+            "\nimport io, shutil, subprocess, tarfile, tempfile\n"
+            "RETURNS = Path(__file__).with_name('returns')\n"
+            "def ssh_bytes(h, cmd):\n    return 1, b'', b'no'\n"
+            "def pull():\n"
+            "    hosts = load_hosts()\n"
+            "    for h in hosts:\n"
+            "        code, blob, err = " + patch_fleet.PULL_TAR_OLD + "\n"
+            "        if code != 0:\n            continue\n"
+            "        with tempfile.TemporaryDirectory() as tmp, tarfile.open(fileobj=io.BytesIO(blob)) as tf:\n"
+            "            tf.extractall(tmp, filter='data')\n"
+            "            src_root = Path(tmp) / 'returns'\n"
+            + patch_fleet.PULL_LOOP_OLD +
+            "                print(dest)\n")
+        write(tools / "fleet.py", FAKE_FLEET.replace("\ndef pull():\n    PULLED.append(1)\n    print(\"no new returns\")\n", "") + pull_src)
+        write(tools / "hosts.conf", "agent2|agent2@agents-mac-mini-1|a|-|-|yes|2\n")
+        (tools / ("fleet.py.bak-" + __import__("datetime").datetime.now().strftime("%Y-%m-%d"))).write_text("first backup\n")
+        sys.argv = ["patch_fleet.py", "--tools", str(tools)]
+        from contextlib import redirect_stdout
+        with redirect_stdout(io.StringIO()) as o:
+            patch_fleet.main()
+            patch_fleet.main()
+        text = (tools / "fleet.py").read_text()
+        self.assertIn(patch_fleet.PULL_LOOP_NEW, text)
+        self.assertIn("COPYFILE_DISABLE=1 tar -czf - returns", text)
+        self.assertIn("pull() already skips stray files", o.getvalue())
+        compile(text, "fleet.py", "exec")
+        baks = sorted(p.name for p in tools.glob("fleet.py.bak-*"))
+        self.assertEqual(len(baks), 3, baks)          # the day's first backup was kept, not overwritten
+        self.assertIn("first backup", (tools / baks[0]).read_text())
+
     def test_2_check_blocks_credentials(self):
         out = self.fx.run("check")
         self.assertEqual(out.count("PASS"), 2, out)
@@ -471,6 +504,9 @@ class HarvestTest(unittest.TestCase):
             m2 = fx.manifest()
             copied = [r for r in m2["rows"] if r.get("copy") and r["copy"] not in ("unchanged", "pointer")]
             self.assertEqual(copied, [], [(r["id"], r["copy"]) for r in copied])
+            # a discovered run the first harvest copied and pushed (here as a pointer) stays on the copy path
+            try1 = next(r for r in m2["rows"] if r["id"] == "jev-model-2026-09-30-try1")
+            self.assertEqual(try1.get("copy"), "unchanged", try1)
             rep = Path(m2["harvest"]["report"]).read_text(encoding="utf-8")
             first = rep.split("## 1. Needed from Elliot")[1].split("## 2.")[0].strip()
             self.assertEqual(first, "Nothing.", rep)

@@ -6,9 +6,12 @@ dispatches to them". fleet.py's load_hosts() reads fields 0 to 6 only, so this p
   1. adds an optional 8th hosts.conf field, harvest_only, and makes load_hosts() skip "yes" rows unless it is
      called with harvest=True (only tools\harvest\harvest.py does), so caps, balance, dispatch and pull never
      touch them;
-  2. appends the agent1 and pc rows to hosts.conf.
-Both files are backed up first (fleet.py.bak-<date>, hosts.conf.bak-<date>) and keep LF line endings. Running it
-again changes nothing, except that it restores LF if an earlier run left CRLF behind.
+  2. appends the agent1 and pc rows to hosts.conf;
+  3. makes pull() skip anything in a host's returns folder that is not a folder (macOS AppleDouble `._<id>` files
+     crashed it on Windows with WinError 267), and asks the Mac's tar not to add such files.
+Both files are backed up first (fleet.py.bak-<date>, hosts.conf.bak-<date>; an existing backup is never
+overwritten) and keep LF line endings. Running it again changes nothing, except that it restores LF if an earlier
+run left CRLF behind.
 
 Usage: C:\Python313\python.exe C:\Projects\master-orchestrator\tools\harvest\patch_fleet.py [--tools DIR]
 """
@@ -50,6 +53,18 @@ NEW = '''def load_hosts(harvest=False):
     return hosts
 '''
 
+# pull(): a stray file in a host's ~/orchestrator/returns is not a return
+PULL_LOOP_OLD = '''            for d in (src_root.iterdir() if src_root.exists() else []):
+                dest = RETURNS / d.name
+'''
+PULL_LOOP_NEW = '''            for d in (src_root.iterdir() if src_root.exists() else []):
+                if not d.is_dir() or d.name.startswith("._"):
+                    continue  # macOS AppleDouble files and stray files are not returns
+                dest = RETURNS / d.name
+'''
+PULL_TAR_OLD = '''ssh_bytes(h, "cd ~/orchestrator && tar -czf - returns")'''
+PULL_TAR_NEW = '''ssh_bytes(h, "cd ~/orchestrator && COPYFILE_DISABLE=1 tar -czf - returns")'''
+
 HOST_LINES = [
     "# Optional 8th field: harvest_only. Rows with \"yes\" are read only by tools\\harvest\\harvest.py (blitz-harvest);",
     "# fleet.py skips them, so they never get caps reads, sprints or pulls.",
@@ -76,6 +91,16 @@ def repair_eol(path):
         print("%s: line endings restored to LF (as in %s)" % (path.name, baks[0].name))
 
 
+def backup(path, stamp):
+    """path.bak-<stamp>, or -2, -3 ... when that name is taken: the first backup of the day is never overwritten."""
+    b, n = path.with_name("%s.bak-%s" % (path.name, stamp)), 1
+    while b.exists():
+        n += 1
+        b = path.with_name("%s.bak-%s-%d" % (path.name, stamp, n))
+    shutil.copyfile(path, b)
+    return b.name
+
+
 def main():
     tools = Path(sys.argv[sys.argv.index("--tools") + 1]) if "--tools" in sys.argv else Path(__file__).resolve().parents[1]
     fleet_py, hosts = tools / "fleet.py", tools / "hosts.conf"
@@ -86,17 +111,30 @@ def main():
     if NEW in src:
         print("fleet.py: already patched")
     elif OLD in src:
-        shutil.copyfile(fleet_py, fleet_py.with_name("fleet.py.bak-" + stamp))
-        write(fleet_py, src.replace(OLD, NEW))
-        print("fleet.py: load_hosts() now skips harvest-only rows (backup fleet.py.bak-%s)" % stamp)
+        name = backup(fleet_py, stamp)
+        src = src.replace(OLD, NEW)
+        write(fleet_py, src)
+        print("fleet.py: load_hosts() now skips harvest-only rows (backup %s)" % name)
     else:
         sys.exit("fleet.py: load_hosts() is not the expected text; not changed. Patch by hand.")
+    todo = [(o, n) for o, n in ((PULL_LOOP_OLD, PULL_LOOP_NEW), (PULL_TAR_OLD, PULL_TAR_NEW)) if n not in src]
+    if not todo:
+        print("fleet.py: pull() already skips stray files")
+    elif all(o in src for o, n in todo):
+        name = backup(fleet_py, stamp)
+        for o, n in todo:
+            src = src.replace(o, n)
+        compile(src, str(fleet_py), "exec")
+        write(fleet_py, src)
+        print("fleet.py: pull() now skips stray files such as ._<id> (backup %s)" % name)
+    else:
+        print("fleet.py: pull() is not the expected text; left as is (its ._ crash stays until patched by hand)")
     conf = read(hosts)
     missing = [ln for ln in HOST_LINES if ln not in conf]
     if missing:
-        shutil.copyfile(hosts, hosts.with_name("hosts.conf.bak-" + stamp))
+        name = backup(hosts, stamp)
         write(hosts, conf.rstrip("\n") + "\n" + "\n".join(missing) + "\n")
-        print("hosts.conf: added %d lines (backup hosts.conf.bak-%s)" % (len(missing), stamp))
+        print("hosts.conf: added %d lines (backup %s)" % (len(missing), name))
     else:
         print("hosts.conf: already has the harvest rows")
     sys.path.insert(0, str(tools))

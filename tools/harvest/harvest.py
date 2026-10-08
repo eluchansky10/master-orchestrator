@@ -1414,12 +1414,17 @@ def dest_base(row):
     return "%s/%s" % (row["host"], name)
 
 
-def to_copy(rows):
+def to_copy(rows, ledger=None):
+    """Rows whose folders the copy step fetches. A run already in the returns repo with no plan is not fetched
+    (PLAN 3.1 source 4), unless an earlier harvest copied it: the harvest's own push put it in the repo, and a
+    later change on the host must still land as a -v2."""
+    ledger = ledger or {}
     pick = []
     for r in rows:
         if not r.get("path") or r.get("host") == "pc":
             continue
-        if r["status"] == "found" and r.get("kind") in ("planned", "discovered", "pattern"):
+        kept = r.get("kind") == "returns-repo" and ledger_key(r) in ledger
+        if r["status"] == "found" and (r.get("kind") in ("planned", "discovered", "pattern") or kept):
             if r.get("nfiles") == 0:
                 r["copy"] = "nothing to copy: 0 readable files"
                 continue
@@ -1439,7 +1444,7 @@ def cmd_copy(ctx):
     ledger = load_json(ctx.ledger_path, {})
     hosts = {h["name"]: h for h in ctx.hosts()}
     todo, results = [], []
-    for r in to_copy(rows):
+    for r in to_copy(rows, ledger):
         k = ledger_key(r)
         led = ledger.get(k)
         cks = (r.get("return") or {}).get("cksum")
@@ -1834,7 +1839,7 @@ def cmd_report(ctx, path=None):
                       hname, ls["sessions"], "" if ls["sessions"] == 1 else "s", ", ".join(ls.get("cwds") or []) or "?",
                       iso(parse_time(ls.get("first"))) or "?", iso(parse_time(ls.get("last"))) or "?",
                       ", ".join(ls.get("models") or []) or "model not recorded"))
-    repo_only = [r for r in rows if r.get("kind") == "returns-repo"]
+    repo_only = [r for r in rows if r.get("kind") == "returns-repo" and not r.get("dest")]
     if repo_only:
         X4.append("- Already in the returns repo with no plan: " + ", ".join(r["id"] for r in repo_only[:15]))
     zl = unpacked_zips(hv.get("zips") or [], rows)
@@ -1860,7 +1865,7 @@ def cmd_report(ctx, path=None):
         elif r.get("status") == "pointer":
             done = "Runs on the PC; pointer only; not synced to the Project."
         elif r.get("status") == "listed":
-            done = ("Nothing copied (%s); not synced to the Project." % r["note"]) if r.get("note") else \
+            done = ("%s%s; not synced to the Project." % (r["note"][0].upper(), r["note"][1:])) if r.get("note") else \
                    "Listed only; nothing copied; not synced to the Project."
         else:
             done = "Not copied; not synced to the Project."
