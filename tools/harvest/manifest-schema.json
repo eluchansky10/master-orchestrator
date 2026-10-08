@@ -191,6 +191,10 @@
               "description": "runs left out of the zip by the 200 MB cap"
             }
           }
+        },
+        "loose_sessions": {
+          "type": "object",
+          "description": "per host: latest-model sessions scoring 4+ whose working folder is no run (home, temp, system): count, first and last timestamps, models, a few cwds. Nothing to copy; listed in report section 4"
         }
       }
     },
@@ -288,9 +292,10 @@
             "expanded",
             "confirm",
             "dropped",
-            "listed"
+            "listed",
+            "pointer"
           ],
-          "description": "found: matched and inside the window or named by a plan; not_found_yet: its host was unreachable; confirm: pattern score 2-3, Elliot decides; listed: shown in the report, not copied"
+          "description": "found: matched and inside the window or named by a plan; not_found_yet: its host was unreachable; confirm: pattern score 2-3, Elliot decides; listed: shown in the report, not copied; pointer: a run on the PC, recorded by a RUNS-HERE.md pointer, never duplicated"
         },
         "already_returned": {
           "type": "boolean"
@@ -418,6 +423,10 @@
         },
         "note": {
           "type": "string"
+        },
+        "returns_copy": {
+          "type": "string",
+          "description": "the host's ~/orchestrator/returns/<id> copy of this run's RETURN.md (fleet.py pull carries it; not copied twice)"
         }
       }
     }

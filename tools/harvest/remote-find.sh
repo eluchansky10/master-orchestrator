@@ -105,6 +105,14 @@ run_root() {
   d=${1%/}
   case "$d" in
     "$H"|"") return ;;
+    "$H/"*) ;;
+    *) return ;;           # temp and system folders (/private/tmp, /private/var/folders, ...) are never runs
+  esac
+  case "$d" in
+    # a Claude Desktop Code-tab session started without a folder works in its own scratch workspace
+    "$H/Library/Application Support/Claude/scratch-workspaces/"*)
+      r=${d#"$H/Library/Application Support/Claude/scratch-workspaces/"}
+      echo "$H/Library/Application Support/Claude/scratch-workspaces/${r%%/*}"; return ;;
     "$H/orchestrator/sprints/_aborted/"*) r=${d#"$H/orchestrator/sprints/_aborted/"}; echo "$H/orchestrator/sprints/_aborted/${r%%/*}"; return ;;
     "$H/orchestrator/sprints/_aborted") return ;;
     "$H/orchestrator/sprints/"*) r=${d#"$H/orchestrator/sprints/"}; echo "$H/orchestrator/sprints/${r%%/*}"; return ;;
@@ -284,19 +292,22 @@ if [ -d "$H/.claude/projects" ]; then
     printf '{"kind":"session","file":%s,"size":%s,"mtime":%s,"first_ts":%s,"last_ts":%s,"cwd":%s,"version":%s,"models":%s,"slash":%s,"effort":%s,"subagent_logs":%s,"workflows":%s}\n' \
       "$(js "$f")" "$(fsize "$f")" "$(mtime "$f")" "$(js "$t1")" "$(js "$t2")" "$(js "$cwd")" "$(js "$ver")" \
       "$(printf '%s\n' "$models" | jarr)" "$(printf '%s\n' "$slash" | jarr)" "$(printf '%s\n' "$effort" | jarr)" "$nsub" "$wf"
-    [ -n "$cwd" ] && printf 'CWD\t%s\n' "$cwd"
+    lm=-
+    printf '%s\n' "$models" | grep -E -q 'fable-5-1|opus-5-5' && lm=L
+    [ -n "$cwd" ] && printf 'CWD\t%s\t%s\n' "$lm" "$cwd"
   done)
 fi
 printf '%s\n' "$SESS" | grep '^{'
 CWDROOTS=""
 oldifs=$IFS; IFS=$NL
-for c in $(printf '%s\n' "$SESS" | sed -n 's/^CWD	//p' | sort -u); do
+for line in $(printf '%s\n' "$SESS" | sed -n 's/^CWD	//p' | sort -u); do
   IFS=$oldifs
+  lm=${line%%	*}; c=${line#*	}
   if [ -d "$c" ]; then
     r=$(run_root "$c")
-    # only folders that look like work: a run marker or a repository within two levels
-    if [ -n "$r" ] && find "$r" -maxdepth 2 \( -name state.json -o -name PROGRESS.md -o -name RETURN.md -o -name MANIFEST.md \
-         -o -name SPRINT.md -o -name GOAL.txt -o -name .git \) 2>/dev/null | head -n 1 | grep -q .; then
+    # folders that look like work: a latest-model session ran there, or a run marker or repository within two levels
+    if [ -n "$r" ] && { [ "$lm" = L ] || find "$r" -maxdepth 2 \( -name state.json -o -name PROGRESS.md -o -name RETURN.md \
+         -o -name MANIFEST.md -o -name SPRINT.md -o -name GOAL.txt -o -name .git \) 2>/dev/null | head -n 1 | grep -q .; }; then
       CWDROOTS="$CWDROOTS$r$NL"
     fi
   fi

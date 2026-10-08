@@ -57,7 +57,7 @@ def pull():
 def write(p, text="x\n", mtime=None):
     p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
+    p.write_bytes(text.encode("utf-8"))      # bytes: LF on Windows too
     if mtime:
         os.utime(p, (mtime, mtime))
     return p
@@ -157,6 +157,16 @@ class Fixture:
         # an aborted run kept under sprints/_aborted, and a personal tax project
         write(s / "_aborted" / "L7-first-attempt-2026-10-01" / "RETURN.md", "# RETURN: L7 first attempt\n10. Status: ABORTED\n")
         write(h / "taxes-agent2" / "PROGRESS.md", "# Taxes 2025\n")
+        write(s / "jev-model-2026-09-30" / "RETURN.md", "# RETURN: jev-model-2026-09-30\n")
+        write(s / "_aborted" / "jev-model-2026-09-30-try1" / "PROGRESS.md", "# first try\n")
+        ws = h / "Library" / "Application Support" / "Claude" / "scratch-workspaces" / "ws-design"
+        write(ws / "home.html", "<html></html>\n")
+        for proj, cwd, ts_ in (("-private-tmp", "/private/tmp", "2026-10-01T02:00:00Z"),
+                               ("-ws-design", str(ws), "2026-10-05T02:00:00Z")):
+            write(h / ".claude" / "projects" / proj / ("%s.jsonl" % proj.strip("-")), jsonl(
+                {"type": "user", "cwd": cwd, "timestamp": ts_, "message": {"content": "<command-name>/goal</command-name>"}},
+                {"type": "assistant", "timestamp": ts_, "message": {"model": "claude-fable-5-1"}},
+                {"type": "assistant", "timestamp": ts_.replace("T0", "T1"), "message": {"model": "claude-fable-5-1"}}))
 
     def make_agent1(self):
         write(self.tmp / "agent1" / ".zshrc", "# nothing here\n")
@@ -205,7 +215,9 @@ class Fixture:
             "| 2. Colombia / Rigo push C1 | `y.zip` | `~/Downloads/colombia-project-playa-2026-10-01/` | `RUN-2.txt` |", ""]))
         extra = write(self.tmp / "extra.json", json.dumps([
             {"id": "lawsuit-loops-2026-10-01", "title": "Lawsuit loops", "source_doc": "thread:Lawsuit loops on agent2",
-             "host_hint": "agent2", "sensitive": True, "match_words": ["lawsuit", "apeira", "pave", "toptal"]}]))
+             "host_hint": "agent2", "sensitive": True, "match_words": ["lawsuit", "litigation", "apeira", "pave", "toptal"]},
+            {"id": "jev-model-2026-09-30", "title": "Jev conformed model", "source_doc": "SPRINT.md", "host_hint": "agent2",
+             "sensitive": True}]))
         harvest.main(["seed", str(docs), "--out", str(self.root / "blitz-returns" / "seeds" / "seed-test.json"),
                       "--extra", str(extra), "--root", str(self.root)])
 
@@ -213,6 +225,23 @@ class Fixture:
         pkg = self.projects / "writing-home" / "work" / "claude-code" / "second-account-loops-2026-09-30"
         write(pkg / "MANIFEST.md", "# MANIFEST\nOverall: normal\n")
         write(pkg / "loops" / "L3" / "state.json", "{}")
+        P = self.projects
+        write(P / "_control" / "_local-backup" / "master-orchestrator" / "returns" / "smoke-001" / "RETURN.md", "# RETURN\n")
+        write(P / "workspace-ops" / "work" / "claude-code" / "PROGRESS.md", "# lane notes\n")
+        write(P / "workspace-ops" / "work" / "claude-code" / "mac-remote-access" / "PROGRESS.md", "# mac access\n")
+        write(P / "taxes" / "work" / "claude-code" / "opus-plan-2026-10-07" / "run-1" / "inputs" / "Tax_Loop_2026-10-03" / "state.json", "{}")
+        write(P / "family-matter" / ".project.json", json.dumps({"slug": "family-matter", "sensitivity": "restricted"}))
+        write(P / "family-matter" / "work" / "claude-code" / "timeline-2026-10-02" / "PROGRESS.md", "# timeline\n")
+        write(P / "litigation-sprints-2026-09-30" / "L9-litigation-ledger-2026-09-30" / "PROGRESS.md", "# ledger\n")
+        write(P / "master-orchestrator" / "prompts" / "L7-nasarai-devpush-2026-09-30" / "PROGRESS.md", "# staged\n")
+        loop = P / "_shared" / "loops" / "account-handoff-recreate"
+        write(loop / "gate" / "honest" / "x.txt", "x\n")
+        ph = self.tmp / "pc-home" / ".claude" / "projects"
+        for i, cwd in enumerate(("C:\\", str(P), str(loop / "gate" / "honest"), str(P / "metronomics" / ".claude" / "worktrees" / "w1"),
+                                 str(self.tmp / "pc-home" / "AppData" / "Local" / "Temp" / "cwguide-1"))):
+            write(ph / ("p%d" % i) / ("s%d.jsonl" % i), jsonl(
+                {"type": "user", "cwd": cwd, "timestamp": "2026-10-04T11:00:00Z", "message": {"content": "<command-name>/goal</command-name>"}},
+                {"type": "assistant", "timestamp": "2026-10-04T13:00:00Z", "message": {"model": "claude-fable-5-1"}}))
 
     def run(self, *args):
         out = io.StringIO()
@@ -315,6 +344,30 @@ class HarvestTest(unittest.TestCase):
         self.assertNotIn(ab["status"], ("not_found",))
         tax = next(r for r in m["rows"] if r.get("path", "").endswith("taxes-agent2"))
         self.assertIs(tax["sensitive"], True)
+        # one run, one answer: the aborted try of a restricted run is restricted too
+        self.assertIs(next(r for r in m["rows"] if r["id"] == "jev-model-2026-09-30-try1")["sensitive"], True)
+        # a host's returns\<id> copy travels with its sprint folder instead of being a second run
+        self.assertFalse([r for r in m["rows"] if r.get("path", "").endswith("orchestrator/returns/writing-home-drafts-2026-10-05")])
+        self.assertTrue(self.fx.row("writing-home-drafts-2026-10-05").get("returns_copy", "").endswith("returns/writing-home-drafts-2026-10-05"))
+        # temp folders are never runs; a scratch workspace with a latest-model /goal session is a pattern candidate
+        self.assertFalse([r for r in m["rows"] if r.get("path", "").startswith("/private/")])
+        self.assertIn("agent2", m["harvest"]["loose_sessions"])
+        self.assertTrue([r for r in m["rows"] if r.get("path", "").endswith("scratch-workspaces/ws-design")])
+        # PC: only run folders under C:\Projects, by work lane, loops or a dated run folder
+        pcp = sorted(r["path"].replace("\\", "/").split("/Projects/")[-1] for r in m["rows"] if r.get("host") == "pc")
+        self.assertIn("writing-home/work/claude-code/second-account-loops-2026-09-30", pcp)
+        self.assertIn("workspace-ops/work/claude-code/mac-remote-access", pcp)
+        self.assertIn("taxes/work/claude-code/opus-plan-2026-10-07", pcp)
+        self.assertIn("_shared/loops/account-handoff-recreate", pcp)
+        self.assertIn("litigation-sprints-2026-09-30/L9-litigation-ledger-2026-09-30", pcp)
+        self.assertNotIn("workspace-ops/work/claude-code", pcp)          # a work lane is not a run
+        for bad in ("_control", "inputs", "master-orchestrator", "metronomics", "AppData"):
+            self.assertFalse([x for x in pcp if x == bad or x.startswith(bad + "/") or "/" + bad in x], (bad, pcp))
+        fam = next(r for r in m["rows"] if r.get("path", "").replace("\\", "/").endswith("timeline-2026-10-02"))
+        self.assertIs(fam["sensitive"], True)
+        self.assertIn("registry", fam["sensitive_why"])
+        lit = next(r for r in m["rows"] if r["id"] == "L9-litigation-ledger-2026-09-30")
+        self.assertEqual((lit["status"], lit["topic_row"]), ("pointer", "lawsuit-loops-2026-10-01"))
         notes = next(r for r in m["rows"] if r.get("path", "").endswith("Documents/notes"))
         self.assertNotEqual(notes["status"], "found")
         # old sprint folders outside the window are not copied
@@ -349,8 +402,12 @@ class HarvestTest(unittest.TestCase):
         sec4 = rep.split("## 4.")[1].split("## 5.")[0]
         self.assertIn("agent1: fleet-ops-blitz-2026-10-03-v1.zip", sec4)
         excluded = rep.split("## 5.")[1].split("## 6.")[0]
-        for rid in ("lawsuit-damages-L9-2026-10-01", "lawsuit-loops-2026-10-01", "colombia-project-playa-2026-10-01"):
+        for rid in ("lawsuit-damages-L9-2026-10-01", "lawsuit-loops-2026-10-01", "colombia-project-playa-2026-10-01",
+                    "L9-litigation-ledger-2026-09-30", "jev-model-2026-09-30-try1"):
             self.assertIn(rid, excluded)
+        # restricted names never appear in section 4; sections 5 to 7 are always there
+        self.assertNotIn("taxes-agent2", sec4)
+        self.assertIn("## 7. Pushed", rep)
         self.assertLess(len(rep.splitlines()), 151)
         self.assertEqual(m["harvest"]["audit"], [])
 
@@ -433,7 +490,9 @@ class HarvestTest(unittest.TestCase):
                  H + "/orchestrator/bin": None, H + "/fleet-harness": H + "/fleet-harness", H: None,
                  H + "/Library/x": None, H + "/proj/loop": H + "/proj",
                  H + "/gt/deacon/dogs/alpha": None, H + "/.local/state/gastown": None,
-                 H + "/orchestrator/sprints/_aborted": None,
+                 H + "/orchestrator/sprints/_aborted": None, "/private/tmp/x": None, "/private/var/folders/ab/T/chain-1": None,
+                 H + "/Library/Application Support/Claude/scratch-workspaces/ws1/sub":
+                     H + "/Library/Application Support/Claude/scratch-workspaces/ws1",
                  H + "/orchestrator/sprints/_aborted/L7-first/loop": H + "/orchestrator/sprints/_aborted/L7-first"}
         for path, want in cases.items():
             self.assertEqual(harvest.run_root(path, H), want, path)

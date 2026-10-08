@@ -91,7 +91,9 @@ ACCOUNT_WORDS = {"cybernova": "elliot@cybernovaequity.com", "gmail": "luchansky.
 USER_HOSTS = {"agent2": "agent2", "luchanskyelliot": "macbook", "agent1": "agent1", "jess": "jjess",
               "owner": "pc"}
 LATEST_MODELS = re.compile(r"fable[- ]5[-.]1|opus[- ]5[-.]5|^fable$|^opus$", re.I)
-CREDENTIAL_LINE = re.compile(r"token|secret|passw|api[_-]?key|sk-[A-Za-z0-9]|ghp_|bearer|authorization", re.I)
+REPORT_LINES = 149         # PLAN 6.3: the report stays under 150 lines
+CREDENTIAL_LINE = re.compile(r"token|secret|passw|api[_-]?key|sk-[A-Za-z0-9]|ghp_|github_pat_|gh[ousr]_|xox[abpr]-|AKIA[0-9A-Z]"
+                             r"|bearer|authorization|\.env\b|[A-Za-z0-9+/_=-]{32,}", re.I)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -258,8 +260,11 @@ def run_root(path, home):
     """Python twin of run_root() in remote-find.sh: the run folder a directory belongs to, or None."""
     d = path.rstrip("/")
     home = home.rstrip("/")
-    if d in (home, ""):
-        return None
+    if d in (home, "") or not d.startswith(home + "/"):
+        return None                              # temp and system folders are never runs
+    scratch = home + "/Library/Application Support/Claude/scratch-workspaces/"
+    if d.startswith(scratch):                    # a Desktop Code-tab session started without a folder
+        return scratch + d[len(scratch):].split("/")[0]
     aborted = home + "/orchestrator/sprints/_aborted"
     if d == aborted:
         return None
@@ -409,6 +414,9 @@ def parse_doc(text, source):
                                             "sensitive": None, "doc_title": title_doc})
                 from_table = ln.lstrip().startswith("|")
                 title = re.sub(r"^\d+[.)]\s+", "", title or "") or None    # "3. First drafts" -> "First drafts"
+                title = re.sub(r",?\s*\(?\bpaste\b.*$", "", title or "", flags=re.I).strip() or None
+                if title and re.match(r"^[\w.-]+\.(txt|md)$", title):
+                    title = None                                          # a file name is not a title
                 if title and (not row["title"] or (from_table and not row.get("title_from_table"))):
                     row["title"] = title[:120]
                     row["title_from_table"] = from_table
@@ -631,17 +639,72 @@ def local_folder_record(path, why, window_start):
             "states": [], "progress_head": ""}
 
 
-def pc_folders(ctx, budget=30):
-    """Sprint-shaped folders under C:\\Projects (never personal folders), plus loop packages."""
+# Top-level C:\\Projects folders that hold no runs: the control plane and its local backup mirror
+PC_SKIP_TOPS = ("_control",)
+
+
+def pc_run_root(path, ctx):
+    """The run folder a PC path belongs to, or None. Only C:\\Projects counts (never home, temp, system or personal
+    folders). A run is C:\\Projects\\<project>\\work\\<lane>\\<run>, or <...>\\loops\\<loop>, or a dated
+    run folder (a sprint id) inside a project. Project-level work, hidden folders, the control plane and this
+    orchestrator's own folder are not runs; .claude\\worktrees fold into their project."""
     projects = ctx.root.parent
-    skip = {ctx.out.resolve(), ctx.returns.resolve()}
+    try:
+        rel = Path(os.path.abspath(str(path))).relative_to(Path(os.path.abspath(str(projects))))
+    except ValueError:
+        return None
+    parts = rel.parts
+    if not parts or parts[0].startswith(".") or parts[0] in PC_SKIP_TOPS or parts[0].lower() == ctx.root.name.lower():
+        return None
+    if ".claude" in parts:
+        parts = parts[:parts.index(".claude")]
+    if len(parts) >= 4 and parts[1].lower() == "work":
+        return str(projects.joinpath(*parts[:4]))
+    for i, part in enumerate(parts):
+        if part.lower() in ("loops", "loop") and i + 1 < len(parts):
+            return str(projects.joinpath(*parts[:i + 2]))
+    for i in range(2, len(parts) + 1):
+        if clean_id(parts[i - 1]):
+            return str(projects.joinpath(*parts[:i]))
+    return None
+
+
+def pc_registry(ctx):
+    """C:\\Projects\\<project>\\.project.json `sensitivity` per project (normal, sensitive, restricted, ...)."""
+    if getattr(ctx, "_registry", None) is None:
+        reg = {}
+        projects = ctx.root.parent
+        for top in sorted(projects.iterdir()) if projects.exists() else []:
+            f = top / ".project.json"
+            if f.is_file():
+                try:
+                    tier = json.loads(f.read_text(encoding="utf-8")).get("sensitivity")
+                except (OSError, ValueError, AttributeError):
+                    tier = "unreadable"
+                if tier:
+                    reg[top.name.lower()] = str(tier).lower()
+        ctx._registry = reg
+    return ctx._registry
+
+
+def pc_tier(path, ctx):
+    try:
+        rel = Path(os.path.abspath(str(path))).relative_to(Path(os.path.abspath(str(ctx.root.parent))))
+    except ValueError:
+        return None
+    return pc_registry(ctx).get(rel.parts[0].lower()) if rel.parts else None
+
+
+def pc_folders(ctx, budget=30):
+    """Run folders under C:\\Projects (never personal folders): each marker file in the window, mapped to its run."""
+    projects = ctx.root.parent
     roots, t0 = set(), time.time()
     for top in sorted(projects.iterdir()) if projects.exists() else []:
-        if not top.is_dir() or top.name.startswith("."):
+        if not top.is_dir() or top.name.startswith(".") or top.name in PC_SKIP_TOPS or top.name.lower() == ctx.root.name.lower():
             continue
         for dirpath, dirnames, filenames in os.walk(top):
             here = Path(dirpath)
-            if here.resolve() in skip or time.time() - t0 > budget:
+            if time.time() - t0 > budget:
                 dirnames[:] = []
                 continue
             depth = len(here.relative_to(projects).parts)
@@ -655,17 +718,9 @@ def pc_folders(ctx, budget=30):
                     continue
             except OSError:
                 continue
-            s = str(here)
-            for marker in ("\\loops\\", "/loops/"):
-                if marker in s:
-                    s = s.split(marker)[0]
-            for marker in ("\\loops", "/loops", "\\loop", "/loop"):
-                if s.endswith(marker):
-                    s = s[: -len(marker)]
-            if Path(s).resolve() == projects.resolve() or Path(s).parent.resolve() == projects.resolve() and \
-                    not any((Path(s) / m).exists() for m in RUN_MARKERS):
-                continue
-            roots.add(s)
+            root = pc_run_root(here, ctx)
+            if root:
+                roots.add(root)
     return [local_folder_record(r, "pc", ctx.window_start) for r in sorted(roots)]
 
 
@@ -889,6 +944,28 @@ def host_account(h, folder, row, key_to_account):
     return h.get("account") if h.get("account") and "@" in h.get("account", "") else None
 
 
+def run_base(rid):
+    """L6-jev-conformed-2026-09-30-try1 and -v2 belong to L6-jev-conformed-2026-09-30."""
+    return re.sub(r"-(try|v|attempt)\d+$", "", rid or "")
+
+
+def propagate_sensitivity(rows):
+    """One run, one answer: when any row of a run is restricted, every row of that run is (its returns copy,
+    an aborted try, a PC copy), so no part of it reaches the Project."""
+    restricted = {}
+    for r in rows:
+        if r.get("sensitive") is True:
+            for k in {run_base(r.get("id")), run_base(r.get("return_id"))} - {""}:
+                restricted.setdefault(k, r["id"])
+    for r in rows:
+        if r.get("sensitive") is True:
+            continue
+        for k in {run_base(r.get("id")), run_base(r.get("return_id"))} - {""}:
+            if k in restricted:
+                r["sensitive"], r["sensitive_why"] = True, "same run as %s, which is restricted" % restricted[k]
+                break
+
+
 def cmd_scan(ctx):
     man = ctx.load()
     if not man.get("rows"):
@@ -904,6 +981,10 @@ def cmd_scan(ctx):
             t0 = time.time()
             folders_by_host[name] = pc_folders(ctx)
             sessions_by_host[name] = pc_sessions(ctx)
+            have = {os.path.normcase(f["path"]) for f in folders_by_host[name]}
+            for root in sorted({pc_run_root(x.get("cwd"), ctx) for x in sessions_by_host[name] if x.get("cwd")} - {None}):
+                if os.path.normcase(root) not in have and os.path.isdir(root):
+                    folders_by_host[name].append(local_folder_record(root, "pc-session", ctx.window_start))
             hinfo[name] = {"reachable": True, "hostname": os.environ.get("COMPUTERNAME", "pc"), "partial": False,
                            "elapsed": round(time.time() - t0, 1), "home": str(pc_home())}
             continue
@@ -963,7 +1044,8 @@ def cmd_scan(ctx):
                     hits = keyword_hits(posixpath.basename(f["path"].replace("\\", "/")), [w.lower() for w in r["match_words"]])
                     if hits and not f.get("missing"):
                         extra_rows.append(dict(r, id=posixpath.basename(f["path"].replace("\\", "/")), kind="planned",
-                                               status="found", host=h["name"], path=f["path"], topic_row=r["id"],
+                                               status="pointer" if h["name"] == "pc" else "found", host=h["name"],
+                                               path=f["path"], topic_row=r["id"],
                                                match_reason="folder name has '%s', named in %s" % (hits[0], r["source_doc"])))
                         claimed.setdefault((h["name"], f["path"]), []).append(extra_rows[-1]["id"])
             r.update({"status": "expanded", "note": "matched %d folders by topic" % sum(1 for x in extra_rows if x.get("topic_row") == r["id"])})
@@ -973,7 +1055,7 @@ def cmd_scan(ctx):
             r.update({"status": "found", "host": hname, "path": f["path"], "match_reason": reason})
         else:
             hh = r.get("host_hint")
-            staged = [p for p in prompts_by_host.get(hh or "agent2", []) if Path(p["name"]).stem == r["id"]]
+            staged = [dict(p, host=hn) for hn, ps in prompts_by_host.items() for p in ps if Path(p["name"]).stem == r["id"]]
             if hh in NEVER_SCAN:
                 r.update({"status": "not_scanned", "note": "named on Jjess's Mac mini, which is never scanned"})
             elif hh and hinfo.get(hh, {}).get("reachable") is False:
@@ -981,7 +1063,8 @@ def cmd_scan(ctx):
             elif r.get("already_returned"):
                 r.update({"status": "already_returned", "note": "its RETURN.md is in the returns repo; no folder found"})
             elif staged:
-                r.update({"status": "not_found", "note": "prompt staged in %s but no run folder: never started" % staged[0]["dir"]})
+                r.update({"status": "not_found", "note": "prompt staged on %s in %s but no run folder: never started" % (
+                    staged[0]["host"], staged[0]["dir"])})
             elif r.get("note"):     # the plan or thread already says what happened to it
                 r.update({"status": "not_found", "note": "no folder found; its source says: " + r["note"]})
             else:
@@ -991,26 +1074,35 @@ def cmd_scan(ctx):
     rows.extend(extra_rows)
     choices = load_json(ctx.out / "choices.json", {"confirm": [], "drop": []})
     # every folder: classify, status, push score; add unmatched ones as discovered or pattern rows
-    folder_rows = []
+    folder_rows, returns_copies = [], {}
     for h in hosts:
         name = h["name"]
         home = hinfo.get(name, {}).get("home", "")
         sess_by_root = {}
         for s in sessions_by_host.get(name, []):
             cwd = (s.get("cwd") or "").replace("\\", "/")
-            root = run_root(cwd, home.replace("\\", "/")) if name != "pc" else cwd
+            root = run_root(cwd, home.replace("\\", "/")) if name != "pc" else pc_run_root(s.get("cwd"), ctx)
             if root:
-                sess_by_root.setdefault(root, []).append(s)
+                sess_by_root.setdefault(root.replace("\\", "/"), []).append(s)
+        sprint_dirs = {f["path"].replace("\\", "/") for f in folders_by_host.get(name, [])
+                       if "/orchestrator/sprints/" in f["path"].replace("\\", "/")}
         for f in folders_by_host.get(name, []):
             if f.get("missing"):
                 continue
             fp = f["path"].replace("\\", "/")
+            twin = fp.replace("/orchestrator/returns/", "/orchestrator/sprints/")
+            if twin != fp and twin in sprint_dirs and not claimed.get((name, f["path"])):
+                returns_copies.setdefault((name, twin), fp)   # fleet.py pull carries it; the run is its sprint folder
+                continue
             ids = claimed.get((name, f["path"]), [])
             rowref = next((r for r in rows if r["id"] in ids), None) if ids else None
             acct = host_account(h, f, rowref, key_to_account)
             sess = sess_by_root.get(fp, [])
             score, signals = push_score(f, sess, name, acct, rowref)
             sens, why = classify(f, rowref or {})
+            tier = pc_tier(f["path"], ctx) if name == "pc" else None
+            if tier and tier != "normal" and sens is not True:
+                sens, why = True, "project registry marks it %s" % tier
             common = {"bytes": f.get("bytes"), "nfiles": f.get("nfiles"), "newest": f.get("newest"),
                       "recent": f.get("recent"), "run_status": run_status(f), "return": f.get("return"),
                       "push_score": score, "push_signals": signals, "sensitive": sens, "sensitive_why": why,
@@ -1037,34 +1129,59 @@ def cmd_scan(ctx):
             folder_rows.append(dict(common, id=rid, title=None, kind=kind, status=status,
                                     source_doc=("pattern:%s" % name) if kind == "pattern" else ("discovered:%s" % name),
                                     host=name, path=f["path"], match_reason=f.get("why")))
-    # sessions whose folder was not found as a run: list the strong ones for Elliot to confirm
+    # sessions whose run folder the finder did not describe: one confirm row per run root (Macs; on the PC every run
+    # root already has a folder record). Sessions with no run root (home, temp, system folders) are only summarised.
+    loose = {}
     for h in hosts:
         name = h["name"]
+        if name == "pc":
+            continue
         home = hinfo.get(name, {}).get("home", "").replace("\\", "/")
         paths = {f["path"].replace("\\", "/") for f in folders_by_host.get(name, [])}
-        for s in sessions_by_host.get(name, []):
-            cwd = (s.get("cwd") or "").replace("\\", "/")
-            root = run_root(cwd, home) if name != "pc" else cwd
+        acct = h.get("account") if "@" in (h.get("account") or "") else None
+        groups = {}
+        for s_ in sessions_by_host.get(name, []):
+            cwd = (s_.get("cwd") or "").replace("\\", "/")
+            root = run_root(cwd, home) if cwd else None
             if root and root in paths:
                 continue
-            fake = {"runner": {}, "hints": []}
-            acct = h.get("account") if "@" in (h.get("account") or "") else None
-            score, signals = push_score(fake, [s], name, acct)
-            if score >= PUSH_CONFIRM:
-                folder_rows.append({"id": "session:" + posixpath.basename(s["file"].replace("\\", "/")), "title": None,
-                                    "kind": "pattern", "status": "confirm", "source_doc": "pattern:%s" % name,
-                                    "host": name, "path": s.get("cwd"), "match_reason": "session log only (%s)" % (
-                                        "cwd is not a project folder" if cwd else "no cwd"),
-                                    "push_score": score, "push_signals": signals, "sensitive": "unknown",
-                                    "sensitive_why": "folder not scanned", "session_file": s["file"],
-                                    "session_size": s.get("size")})
+            groups.setdefault(root, []).append(s_)
+        for root, ss in groups.items():
+            score, signals = push_score({"runner": {}, "hints": []}, ss, name, acct)
+            if root is None:
+                strong = [x for x in ss if push_score({"runner": {}, "hints": []}, [x], name, acct)[0] >= PUSH_HARVEST]
+                if strong:
+                    ts = sorted(t for x in strong for t in (x.get("first_ts"), x.get("last_ts")) if t)
+                    loose[name] = {"sessions": len(strong), "first": ts[0] if ts else "", "last": ts[-1] if ts else "",
+                                   "models": sorted({m for x in strong for m in x.get("models") or []}),
+                                   "cwds": sorted({(x.get("cwd") or "?").replace(home, "~", 1) for x in strong})[:5]}
+                continue
+            if score < PUSH_CONFIRM:
+                continue
+            base = posixpath.basename(root)
+            if base in choices.get("drop", []) or root in choices.get("drop", []):
+                status = "dropped"
+            else:
+                status = "confirm"
+            hits = keyword_hits(root, STRONG_WORDS + SOFT_WORDS)
+            folder_rows.append({"id": base, "title": None, "kind": "pattern", "status": status,
+                                "source_doc": "pattern:%s" % name, "host": name, "path": root,
+                                "match_reason": "session logs only (%d); the finder did not list the folder" % len(ss),
+                                "push_score": score, "push_signals": signals, "sessions": len(ss),
+                                "sensitive": True if hits else None,
+                                "sensitive_why": ("keyword '%s' in its path" % hits[0]) if hits else "folder not read"})
     rows[:] = [r for r in rows if r.get("kind") not in ("discovered", "pattern", "pc")] + folder_rows
+    for r in rows:
+        rc = returns_copies.get((r.get("host"), (r.get("path") or "").replace("\\", "/")))
+        if rc:
+            r["returns_copy"] = rc
+    propagate_sensitivity(rows)
     # sweep for other hosts (section 3.6)
     evidence = light_sweep(ctx, peers)
     fleet_names = {"agent2", "agents-mac-mini-1", "agent1", "agent-1", "agent-1-1", "macbook", "luchanskys-macbook-air",
                    "desktop-gj0ek81", "pc"}
     man["harvest"].update({"scanned_utc": now_utc().isoformat(timespec="seconds"), "hosts": hinfo,
-                           "tailscale": peers, "zips": zips,
+                           "tailscale": peers, "zips": zips, "loose_sessions": loose,
                            "other_hosts": {k: v for k, v in evidence.items() if k not in fleet_names}})
     ctx.save(man)
     for name, info in hinfo.items():
@@ -1550,102 +1667,140 @@ def cmd_report(ctx, path=None):
         need.append("- Returns push: %s" % cell(push["error"], 120))
     if hv.get("audit"):
         need.append("- Credential-looking files found in blitz-returns: %s" % ", ".join(hv["audit"][:5]))
-    L += ["## 1. Needed from Elliot", ""] + (need or ["Nothing."]) + [""]
-    # 2. found and copied
-    found = [r for r in rows if r.get("status") == "found"]
-    L += ["## 2. Found and copied", "", "| Sprint | Title | Host | Path | Size | Status | Copy | Destination |",
+    S1 = ["## 1. Needed from Elliot", ""] + (need or ["Nothing."]) + [""]
+    home_of = lambda r: hosts.get(r.get("host"), {}).get("home") or "~"
+    short = lambda r, n=48: cell((r.get("path") or "").replace(home_of(r), "~", 1), n)
+    restricted = lambda r: r.get("sensitive") is True
+    # 2. found and copied (one line per run; a host's returns\<id> copy travels with its sprint folder)
+    found = [r for r in rows if r.get("status") == "found" and r.get("host") != "pc"]
+    found.sort(key=lambda r: (r.get("kind") != "planned", HOST_ORDER.index(r["host"]) if r["host"] in HOST_ORDER else 9, r["id"]))
+    S2 = ["## 2. Found and copied", "", "| Sprint | Title | Host | Path | Size | Status | Copy | Destination |",
           "|---|---|---|---|---|---|---|---|"]
-    for r in sorted(found, key=lambda r: (HOST_ORDER.index(r["host"]) if r["host"] in HOST_ORDER else 9, r["id"])):
-        L.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
-            cell(r["id"], 44), cell(r.get("title") or "", 34), r["host"], cell(r["path"].replace(hosts.get(r["host"], {}).get("home", "~"), "~"), 48),
-            human(r.get("bytes")), cell(r.get("run_status"), 18), cell(r.get("copy", "not copied"), 22),
-            cell("blitz-returns\\" + r["dest"].replace("/", "\\") if r.get("dest") else "", 50)))
-    pcs = [r for r in rows if r.get("host") == "pc" and r.get("status") == "pointer"]
-    if pcs:
-        L += ["", "PC runs (pointer files in blitz-returns\\pc\\, not duplicated): " +
-              ", ".join(cell(Path(r["path"]).name, 40) for r in pcs[:12])]
-    L.append("")
+    T2 = ["| %s | %s | %s | %s | %s | %s | %s | %s |" % (
+        cell(r["id"], 44), cell(r.get("title") or "", 34), r["host"], short(r), human(r.get("bytes")),
+        cell(r.get("run_status"), 18), cell(r.get("copy", "not copied"), 22),
+        cell("blitz-returns\\" + r["dest"].replace("/", "\\") if r.get("dest") else "", 50)) for r in found] or ["| none |  |  |  |  |  |  |  |"]
+    pcs = [r for r in rows if r.get("host") == "pc" and r.get("status") in ("pointer", "found")]
+    P2 = (["", "PC runs (pointer files in blitz-returns\\pc\\, not duplicated): " +
+           ", ".join(cell(Path(r["path"]).name, 40) for r in pcs[:15]) + (" and %d more" % (len(pcs) - 15) if len(pcs) > 15 else "")]
+          if pcs else []) + [""]
     # 3. not found
     nf = [r for r in rows if r.get("kind") == "planned" and r.get("status") in ("not_found", "not_found_yet", "not_scanned", "already_returned")]
-    L += ["## 3. Not found anywhere", ""]
-    L += ["- %s (%s, from %s): %s" % (r["id"], r.get("host_hint") or "host?", cell(r.get("source_doc"), 50),
-                                       r.get("note") or r["status"]) for r in nf] or ["None."]
-    L.append("")
-    # 4. discovered and pattern-recognized
-    disc = [r for r in rows if r.get("kind") in ("discovered", "pattern") and r.get("status") in ("found", "confirm")]
-    L += ["## 4. Discovered runs not in any plan, and pushes to confirm", ""]
-    for r in sorted(disc, key=lambda r: (r["status"] != "found", -(r.get("push_score") or 0))):
-        L.append("- %s %s on %s, score %s/5%s: %s" % (
-            "Harvested" if r["status"] == "found" else "Confirm or drop:", cell(r["id"], 50), r["host"],
-            r.get("push_score"), (" (%s)" % cell(r["path"], 60)) if r.get("path") else "",
-            cell("; ".join(r.get("push_signals") or []), 220)))
+    S3 = ["## 3. Not found anywhere", ""] + (["- %s (%s, from %s): %s" % (
+        r["id"], r.get("host_hint") or "host?", cell(r.get("source_doc"), 50), r.get("note") or r["status"]) for r in nf]
+        or ["None."]) + [""]
+    # 4. discovered and pattern-recognized: one line per run folder, restricted ones only by reference
+    S4 = ["## 4. Discovered runs not in any plan, and pushes to confirm", ""]
+    T4 = []
+    disc = [r for r in rows if r.get("kind") == "discovered" and r.get("status") == "found" and r.get("host") != "pc"]
+    if disc:
+        T4.append("- Harvested sprint folders no plan names: " + ", ".join(
+            "%s (%s)" % (r["id"], r["host"]) for r in sorted(disc, key=lambda r: r["id"])))
+    for r in sorted([r for r in rows if r.get("kind") == "pattern" and r.get("status") == "found"],
+                    key=lambda r: -(r.get("push_score") or 0)):
+        T4.append("- Harvested a restricted run on %s, score %s/5 (named in section 5)" % (r["host"], r.get("push_score"))
+                  if restricted(r) else "- Harvested %s on %s, score %s/5 (%s): %s" % (
+                      cell(r["id"], 40), r["host"], r.get("push_score"), short(r, 50), cell("; ".join(r.get("push_signals") or []), 160)))
+    conf = sorted([r for r in rows if r.get("status") == "confirm"], key=lambda r: (-(r.get("push_score") or 0), r["host"], r["id"]))
+    C4 = []
+    for r in conf:
+        C4.append("- Confirm or drop: a restricted folder on %s, score %s/5 (named in section 5)" % (r["host"], r.get("push_score"))
+                  if restricted(r) else "- Confirm or drop: %s on %s, score %s/5%s (%s): %s" % (
+                      cell(r["id"], 40), r["host"], r.get("push_score"),
+                      (", %d session%s" % (r["sessions"], "" if r["sessions"] == 1 else "s")) if r.get("sessions") else "",
+                      short(r, 50), cell("; ".join(r.get("push_signals") or []), 140)))
+    if conf:
+        C4.append("- To harvest one from now on: `harvest.py confirm <name>`; to stop listing it: `harvest.py drop <name>`.")
+    X4 = []
+    for hname, ls in sorted((hv.get("loose_sessions") or {}).items()):
+        X4.append("- %s: %d push-like session%s with no run folder (working folder %s), %s to %s, %s. Session logs are "
+                  "never copied; their outputs, if any, are in the runs above." % (
+                      hname, ls["sessions"], "" if ls["sessions"] == 1 else "s", ", ".join(ls.get("cwds") or []) or "?",
+                      iso(parse_time(ls.get("first"))) or "?", iso(parse_time(ls.get("last"))) or "?",
+                      ", ".join(ls.get("models") or []) or "model not recorded"))
     repo_only = [r for r in rows if r.get("kind") == "returns-repo"]
     if repo_only:
-        L.append("- Already in the returns repo with no plan: " + ", ".join(r["id"] for r in repo_only[:15]))
-    loose = unpacked_zips(hv.get("zips") or [], rows)
-    if loose:
-        L.append("- Package zips in a Mac's Downloads with no unpacked run folder (listed, not copied): " +
-                 "; ".join("%s: %s" % (z["host"], posixpath.basename(z["path"])) for z in loose[:10]))
-    if not disc and not repo_only and not loose:
-        L.append("None.")
-    L.append("")
-    # 5. excluded for privacy (reproduced verbatim in the cloud reply)
-    L += ["## 5. Excluded for privacy", ""]
-    # every item marked sensitive or unknown, found or not, so restricted plans are named even when nothing ran
-    excl = [r for r in rows if r.get("sensitive") is not False and (
-        r.get("status") in ("found", "confirm", "pointer") or (r.get("sensitive") is True and r.get("kind") == "planned"))]
+        X4.append("- Already in the returns repo with no plan: " + ", ".join(r["id"] for r in repo_only[:15]))
+    zl = unpacked_zips(hv.get("zips") or [], rows)
+    if zl:
+        X4.append("- Package zips in a Mac's Downloads with no unpacked run folder (listed, not copied): " +
+                  "; ".join("%s: %s" % (z["host"], posixpath.basename(z["path"])) for z in zl[:10]))
+    E4 = [] if (T4 or C4 or X4) else ["None."]
+    # 5. excluded for privacy (reproduced verbatim in the cloud reply): every restricted item by name, and every
+    # copied item whose sensitivity is unknown
+    S5 = ["## 5. Excluded for privacy", ""]
+    excl = [r for r in rows if (restricted(r) and (r.get("status") in ("found", "confirm", "pointer") or r.get("kind") == "planned"))
+            or (r.get("sensitive") is not False and r.get("status") == "found")]
     for r in excl:
         if r.get("dest") and r.get("host") != "pc":
-            done = "Copied to the PC only; not synced to the Project."
+            done = ("Would be copied to the PC only (dry run)" if hv.get("dry_run") else "Copied to the PC only") + \
+                   "; not synced to the Project."
         elif r.get("status") == "expanded":
             done = "Topic: each matching folder is its own line here."
         elif r.get("status") in ("not_found", "not_found_yet", "not_scanned", "planned"):
             done = "Not found this run (%s); if found it stays PC-only." % r["status"].replace("_", " ")
+        elif r.get("status") == "confirm":
+            done = "A push to confirm; not copied. If confirmed it stays PC-only."
+        elif r.get("status") == "pointer":
+            done = "Runs on the PC; pointer only; not synced to the Project."
         else:
             done = "Not copied; not synced to the Project."
         why = r.get("sensitive_why") or "restricted in its plan (%s)" % cell(r.get("source_doc") or "", 50)
-        L.append("- %s (%s): %s. %s" % (cell(r["id"], 50), r.get("host") or r.get("host_hint") or "host?", why, done))
+        S5.append("- %s (%s): %s. %s" % (cell(r["id"], 50), r.get("host") or r.get("host_hint") or "host?", why, done))
     names = sorted({n for r in rows for n in (r.get("excluded_names") or [])})
     if names:
-        L.append("- Files never copied under the credential rule: %s%s" % (", ".join(names[:12]),
-                                                                          " and %d more" % (len(names) - 12) if len(names) > 12 else ""))
+        S5.append("- Files never copied under the credential rule: %s%s" % (", ".join(names[:12]),
+                                                                           " and %d more" % (len(names) - 12) if len(names) > 12 else ""))
     if not excl and not names:
-        L.append("Nothing excluded.")
-    L.append("- Not scanned: Jjess's Mac mini (not a Claude host, by decision); the PC's personal folders (Downloads, "
-             "Documents) and hidden C:\\Projects folders; on the Macs, home dot folders and ~/gt (Gas Town, "
-             "agent2's always-on agent office: infrastructure, not runs).")
-    L.append("")
+        S5.append("Nothing excluded.")
+    S5 += ["- Not scanned: Jjess's Mac mini (not a Claude host, by decision); on the PC, anything outside C:\\Projects "
+           "(personal folders, temp, system), hidden C:\\Projects folders and the C:\\Projects\\_control backup mirror; on the "
+           "Macs, home dot folders, temp folders and ~/gt (Gas Town, agent2's always-on agent office: infrastructure, not runs).", ""]
     # 6. possible other hosts
-    L += ["## 6. Possible other hosts", ""]
+    S6 = ["## 6. Possible other hosts", ""]
     oh = hv.get("other_hosts") or {}
     for peer, ev in oh.items():
         jj = peer in NEVER_SCAN
-        L.append("- %s: %s Evidence: %s" % (
+        S6.append("- %s: %s Evidence: %s" % (
             peer, "Jjess's Mac mini: not a Claude host; not scanned." if jj else
             "not scanned. To include it, add a `harvest_only` row for it to tools\\hosts.conf.",
-            "; ".join("%s:%s %s" % (Path(e["file"]).name, e["line"], cell(e["text"], 90)) for e in ev[:2])))
+            "; ".join("%s:%s %s" % (Path(e["file"]).name, e["line"],
+                                    "[line withheld: it may hold a credential]" if CREDENTIAL_LINE.search(e["text"]) else cell(e["text"], 90))
+                      for e in ev[:2])))
     if not oh:
-        L.append("None.")
+        S6.append("None.")
     ts = hv.get("tailscale") or []
     if ts:
-        L.append("- Tailscale peers at scan time: " + ", ".join("%s %s" % (p["name"] or p["dns"], "online" if p["online"] else "offline")
-                                                               for p in ts if p.get("name") or p.get("dns")))
-    L.append("")
+        S6.append("- Tailscale peers at scan time: " + ", ".join("%s %s" % (p["name"] or p["dns"], "online" if p["online"] else "offline")
+                                                                for p in ts if p.get("name") or p.get("dns")))
+    S6.append("")
     # 7. pushed
-    L += ["## 7. Pushed to orchestrator-returns", ""]
+    S7 = ["## 7. Pushed to orchestrator-returns", ""]
     if push:
-        L.append("- Commit %s, pushed %s. Full returns: %s. Pointer-only (restricted): %s." % (
+        S7.append("- Commit %s, pushed %s. Full returns: %s. Pointer-only (restricted): %s." % (
             push.get("commit") or "none", "yes" if push.get("pushed") else "no",
             ", ".join(push.get("added") or []) or "none", ", ".join(push.get("pointer") or []) or "none"))
-        L.append("- fleet.py pull: %s" % cell(push.get("fleet_pull"), 160))
+        S7.append("- fleet.py pull: %s" % cell(push.get("fleet_pull"), 160))
         if push.get("skipped"):
-            L.append("- Skipped: " + "; ".join(push["skipped"][:8]))
+            S7.append("- Skipped: " + "; ".join(push["skipped"][:8]))
     else:
-        L.append("Not run.")
-    L += ["", "Details: harvest-manifest.json beside this file (and harvest-ledger.json for what each folder held "
-          "when copied)."]
-    if len(L) > 150:
-        L = L[:148] + ["", "(Report cut at 150 lines; the rest is in harvest-manifest.json.)"]
+        S7.append("Not run.")
+    S7 += ["", "Details: harvest-manifest.json beside this file (and harvest-ledger.json for what each folder held "
+           "when copied)."]
+    # fit in 150 lines: sections 1, 3, 5, 6 and 7 always whole; the run table and the confirm list give way
+    fixed = len(L) + len(S1) + len(S2) + len(P2) + len(S3) + len(S4) + len(X4) + len(E4) + 1 + len(S5) + len(S6) + len(S7)
+    room = max(0, REPORT_LINES - fixed)
+    def fit(lines, n, what):
+        if len(lines) <= n:
+            return lines
+        n = max(n, 1)
+        return lines[:n - 1] + ["- ... %d more %s in harvest-manifest.json" % (len(lines) - n + 1, what)]
+    t2 = fit(T2, max(min(len(T2), room - min(len(T4) + len(C4), room // 3)), 1), "runs")
+    room -= len(t2)
+    t4 = fit(T4, max(min(len(T4), room // 2), 1) if T4 else 0, "harvested runs") if T4 else []
+    room -= len(t4)
+    c4 = fit(C4, max(room, 1), "pushes to confirm") if C4 else []
+    L += S1 + S2 + t2 + P2 + S3 + S4 + t4 + c4 + X4 + E4 + [""] + S5 + S6 + S7
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(L) + "\n", encoding="utf-8")
     man["harvest"]["report"] = str(path)
