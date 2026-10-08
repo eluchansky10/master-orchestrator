@@ -9,7 +9,7 @@ description: Find every blitz run and major token push on the PC, agent2, the Ma
 
 The work is done by plain Python and POSIX shell in `C:\Projects\master-orchestrator\tools\harvest\` (no model calls, never `claude -p`). Run them with `C:\Python313\python.exe`. Reading the report and asking Elliot about it is the Claude's part.
 
-Design record: `/mnt/project-files/master-orchestrator/skills/blitz-harvest/PLAN.md` (Project) and `BUILD-STATE.md` beside it (what was built, tested, and corrected).
+Design record: `/mnt/project-files/master-orchestrator/skills/blitz-harvest/PLAN.md` (Project) and `BUILD-STATE.md` beside it (what was built, tested, and corrected). Source of the scripts: branch `claude/project-thread-9s605g` of `eluchansky10/master-orchestrator`, `tools/harvest/`; the PC installs them from its clone `C:\Projects\master-orchestrator\.harvest-src`, and a copy for cloud threads sits in the Project at `skills/blitz-harvest/tools/`.
 
 ## Commands
 
@@ -27,7 +27,8 @@ Design record: `/mnt/project-files/master-orchestrator/skills/blitz-harvest/PLAN
 | Write the report | `report` |
 | Credential self-test | `check` |
 | Harvest a pattern push from now on / stop listing it | `confirm <folder>` / `drop <folder>` |
-| Zip the non-restricted subset for the Project | `sync` |
+| Zip the non-restricted subset for the Project | `sync` (200 MB per harvest, smallest runs first, a run that does not fit sends its control files; 24 MB parts; `--cap-mb`, `--part-mb`; `--resend` to include runs an earlier sync already sent) |
+| Unpack sync parts into the Project (cloud side) | `python3 -I <tools>/harvest.py unpack <every part> --to /mnt/project-files/master-orchestrator/blitz-returns` |
 | Rows from Project docs and threads (cloud side) | `seed <docs...> --extra rows.json --out seed-cloud-<date>.json` |
 | Tests | `python tools\harvest\test_harvest.py` |
 
@@ -35,7 +36,7 @@ Design record: `/mnt/project-files/master-orchestrator/skills/blitz-harvest/PLAN
 
 **Planned runs** (`plan`): every `blitz-returns\seeds\*.json` (rows the Project sends), the PC's `blitz\`, `intake\`, `prompts\`, `macbook-*` docs, `state\dispatch-log.jsonl`, and the returns repo clone. A run is named by its folder path, a `Sprint <id>` line, a `run-sprint.sh` or `fleet.py dispatch` line, or a package name. A seed row with `match_words` is a topic (for example the lawsuit loops): every folder whose name holds one of the words becomes its own row.
 
-**Pattern-recognized pushes** (`scan`): any run folder or session no plan names is scored on five signals: model (latest Fable or Opus), intensity (high/xhigh/max effort, Ultracode, Workflow or several subagents, `/goal`, `/loop`, over 2 hours, `MAX_HOURS`), location (a Mac or a sprint account), timing (started within 48 h before that account's reset), shape (state.json, PROGRESS.md, RETURN.md, MANIFEST.md, GOAL.txt, SPRINT.md). Score 4 or 5 is harvested; 2 or 3 is listed to confirm.
+**Pattern-recognized pushes** (`scan`): any run folder or session no plan names is scored on five signals: model (latest Fable or Opus), intensity (high/xhigh/max effort, Ultracode, Workflow or several subagents, `/goal`, `/loop`, over 2 hours, `MAX_HOURS`), location (a Mac or a sprint account), timing (started within 48 h before that account's reset), shape (state.json, PROGRESS.md, RETURN.md, MANIFEST.md, GOAL.txt, SPRINT.md). Score 4 or 5 is harvested; 2 or 3 is listed to confirm. Two kinds are held as a confirm even at 4 or 5: a restricted push, and a Claude Desktop scratch workspace ("copied only if Elliot confirms"). A push folder with no readable files, or a linked folder, is listed with "nothing to copy" and never copied.
 
 **Where a run can be.** On a Mac, only inside the home folder: `~/orchestrator/sprints/<id>` (and `sprints/_aborted/<id>`), `~/Downloads/<package>`, Claude Desktop scratch workspaces, and any home folder holding run control files. Never `~/gt` (Gas Town, agent2's always-on agent office), home dot folders, `~/Library`, temp or system folders. On the PC, only under `C:\Projects`: `<project>\work\<lane>\<child>`, `...\loops\<child>`, or a dated run folder; `_control`, dot folders and `master-orchestrator` itself are never runs, and `.claude\worktrees` counts as its project. Latest-model sessions scoring 4+ whose folder is no run (home, temp) are listed in section 4 as loose sessions, with nothing to copy.
 
@@ -47,15 +48,15 @@ From `tools\hosts.conf` (rows with an 8th field `yes` are harvest-only; `fleet.p
 
 ## Running on the PC (the default)
 
-1. `harvest.py all`. On a first run, or after adding a host, do `plan`, `scan`, `copy --dry-run`, `report` first and check the copy list and sizes.
+1. `harvest.py all`. On a first run, or after adding a host, do `plan`, `scan`, `copy --dry-run`, `report` first and check the copy list and sizes (a dry run writes `HARVEST-<date>-dryrun.md`, so the day's real report names stay free). Each folder streams over SSH as `tar -czf -`, unpacks into `<run>.partial` and is renamed into place; a rename Windows blocks for a moment (indexer, antivirus) is retried six times, then copied into place.
 2. Open the newest `blitz-returns\HARVEST-<date>.md` (at most 150 lines: 1 Needed from Elliot, 2 Found and copied, 3 Not found anywhere, 4 Discovered runs and pushes to confirm, 5 Excluded for privacy, 6 Possible other hosts, 7 Pushed). Section 1 first: tell him each line, one line each. Pushes to confirm are never in section 1; they are a question, not a blocker.
 3. Section 4 pushes to confirm: ask Elliot once, in a short list, harvest or drop; record with `confirm` / `drop`; run `all` again.
 4. The report's sync line says the Project copy was not made; run this skill from the Project for that.
 
 ## From the Master Orchestrator Project
 
-1. **Rows.** In the thread's container: `python3 /mnt/project-files/master-orchestrator/skills/blitz-harvest/tools/harvest.py seed /mnt/project-files/master-orchestrator/{blitz,intake,prompts} /mnt/project-files/master-orchestrator/macbook-* /mnt/project-files/SPRINT.md --extra rows.json --out seed-cloud-<date>.json`. `rows.json` holds runs named only in the threads "Weekly blitz run", "/weekly-blitz", "Lawsuit loops on agent2", "Loop package intake", "MacBook lane and cap balancing", "Blitz inventory and progress page" (read once with `fetch_thread`, first pages only): `{"id", "title", "source_doc": "thread:<title>", "host_hint", "account", "sensitive", "note", "match_words"?}`.
-2. **Run it on the PC.** `start_rc_session` on Elliot's message, `environment_id` from project memory (preapproved `C:\Projects`). Brief: write the seed JSON (in the brief) to `blitz-returns\seeds\`, run `harvest.py all` (`--days` as needed), then `harvest.py sync`, and send back the report text, the counts, and the sync zip path and size. Never brief it to write on a Mac or to run scripted Claude. If its permission check refuses a step, it says so; ask Elliot once, never route around it.
+1. **Rows.** In the thread's container: `python3 -I /mnt/project-files/master-orchestrator/skills/blitz-harvest/tools/harvest.py seed /mnt/project-files/master-orchestrator/{blitz,intake,prompts} /mnt/project-files/master-orchestrator/macbook-* /mnt/project-files/SPRINT.md --extra rows.json --out seed-cloud-<date>.json`. `rows.json` holds runs named only in the threads "Weekly blitz run", "/weekly-blitz", "Lawsuit loops on agent2", "Loop package intake", "MacBook lane and cap balancing", "Blitz inventory and progress page" (read once with `fetch_thread`, first pages only): `{"id", "title", "source_doc": "thread:<title>", "host_hint", "account", "sensitive", "note", "match_words"?}`.
+2. **Run it on the PC.** `start_rc_session` on Elliot's message, `environment_id` from project memory (preapproved `C:\Projects`). Brief: write the seed JSON (carried in the brief itself; a seed names restricted runs, so it never goes through GitHub or another public route) to `blitz-returns\seeds\`, run `harvest.py all` (`--days` as needed), then `harvest.py sync`, and send back the report text, the counts, and the sync part paths and sizes. Never brief it to write on a Mac or to run scripted Claude. If its permission check refuses a step, it says so; ask Elliot once, never route around it.
 3. **Bring the subset into the Project.** <!-- route filled in at build stage 5 --> Check every top-level `host/run` in the zip is `sensitive: false` in its `harvest-manifest.json` before extracting into `/mnt/project-files/master-orchestrator/blitz-returns/`; never extract `pc/` or a restricted run. The zip holds at most 200 MB; larger runs come as control files only, listed in `SYNC-NOTES.md`.
 4. **Memory index.** Update the memory file `blitz-harvest-index` (type project) in place: one line per harvested run (id, host, PC path, Project path or "PC only (restricted)", status, date), under 4 KB, pointing at the report for detail.
 5. **Reply.** Lead with what is needed from Elliot (or "Nothing needed"), then counts (found, copied, not found, excluded), then the report's section 5 "Excluded for privacy" word for word, with the report attached through `attached_outputs`. Under 80 words besides the excluded list.
@@ -78,4 +79,4 @@ Restricted runs are copied to the PC only and go to the returns repo as pointer 
 
 ## Files
 
-`tools\harvest\`: `harvest.py`, `remote-find.sh`, `patch_fleet.py` (one-time `hosts.conf`/`fleet.py` change), `manifest-schema.json`, `test_harvest.py`. `blitz-returns\`: `HARVEST-<date>.md`, `harvest-manifest.json`, `harvest-ledger.json`, `choices.json`, `seeds\`, `<host>\<run>\`, `pc\<name>\RUNS-HERE.md`, `.scan\` (raw finder output), `README.md`.
+`tools\harvest\`: `harvest.py`, `remote-find.sh`, `patch_fleet.py` (one-time `hosts.conf`/`fleet.py` change), `manifest-schema.json`, `test_harvest.py`. `blitz-returns\`: `HARVEST-<date>.md`, `harvest-manifest.json`, `harvest-ledger.json`, `choices.json`, `sync-<date>[-partKofN].zip`, `sync-ledger.json` (what each sync sent), `seeds\`, `<host>\<run>\`, `pc\<name>\RUNS-HERE.md`, `.scan\` (raw finder output), `README.md`.
