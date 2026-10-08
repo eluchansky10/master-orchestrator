@@ -15,6 +15,7 @@
 VERSION=1
 DAYS=8
 FIND_SECONDS=25
+MAX_SESSIONS=400
 NL='
 '
 PATHS=""
@@ -22,12 +23,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --days) DAYS=$2; shift 2 ;;
     --find-seconds) FIND_SECONDS=$2; shift 2 ;;
+    --max-sessions) MAX_SESSIONS=$2; shift 2 ;;
     --path) PATHS="$PATHS$2$NL"; shift 2 ;;
     *) shift ;;
   esac
 done
 case "$DAYS" in ''|*[!0-9]*) DAYS=8 ;; esac
 case "$FIND_SECONDS" in ''|*[!0-9]*) FIND_SECONDS=25 ;; esac
+case "$MAX_SESSIONS" in ''|*[!0-9]*) MAX_SESSIONS=400 ;; esac
 
 START=$(date -u +%s)
 H=${HOME%/}
@@ -102,10 +105,14 @@ run_root() {
   d=${1%/}
   case "$d" in
     "$H"|"") return ;;
+    "$H/orchestrator/sprints/_aborted/"*) r=${d#"$H/orchestrator/sprints/_aborted/"}; echo "$H/orchestrator/sprints/_aborted/${r%%/*}"; return ;;
+    "$H/orchestrator/sprints/_aborted") return ;;
     "$H/orchestrator/sprints/"*) r=${d#"$H/orchestrator/sprints/"}; echo "$H/orchestrator/sprints/${r%%/*}"; return ;;
     "$H/orchestrator/returns/"*) r=${d#"$H/orchestrator/returns/"}; echo "$H/orchestrator/returns/${r%%/*}"; return ;;
     "$H/orchestrator"|"$H/orchestrator/"*) return ;;
-    "$H/Library"|"$H/Library/"*|"$H/.Trash"|"$H/.Trash/"*|"$H/.claude"|"$H/.claude/"*|"$H/.config"|"$H/.config/"*) return ;;
+    "$H/Library"|"$H/Library/"*|"$H/."*) return ;;
+    # Gas Town (agent2's always-on agent office) is infrastructure, not a run: see SKIP_TREES
+    "$H/gt"|"$H/gt/"*) return ;;
   esac
   case "$d" in
     */loops/*) d=${d%%/loops/*} ;;
@@ -229,8 +236,13 @@ fi
 ORCH=""
 for base in sprints returns; do
   for d in "$H/orchestrator/$base"/*/; do
-    [ -d "$d" ] && ORCH="$ORCH${d%/}$NL"
+    [ -d "$d" ] || continue
+    [ "${d%/}" = "$H/orchestrator/sprints/_aborted" ] && continue
+    ORCH="$ORCH${d%/}$NL"
   done
+done
+for d in "$H/orchestrator/sprints/_aborted"/*/; do
+  [ -d "$d" ] && ORCH="$ORCH${d%/}$NL"
 done
 set -f
 emit_list "orchestrator" "$ORCH"
@@ -239,9 +251,20 @@ emit_list "named" "$NAMED"
 
 # ------------------------------------------------------------------ 4. Claude Code sessions (metadata only)
 
+# "mtime path" for each session file in the window, Gas Town and home-dot-folder projects left out.
+session_files() {
+  if [ $BSD = 1 ]; then fmt='%m %N'; opt=-f; else fmt='%Y %n'; opt=-c; fi
+  find "$H/.claude/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -mtime -"$DAYS" \
+    ! -path "$H/.claude/projects/$HDASH-gt/*" ! -path "$H/.claude/projects/$HDASH-gt-*" \
+    ! -path "$H/.claude/projects/$HDASH--*" -exec stat "$opt" "$fmt" {} + 2>/dev/null
+}
+
 SESS=""
 if [ -d "$H/.claude/projects" ]; then
-  SESS=$(find "$H/.claude/projects" -mindepth 2 -maxdepth 2 -type f -name '*.jsonl' -mtime -"$DAYS" 2>/dev/null | head -n 400 |
+  # Claude names a project folder after its cwd with / and . turned into -; skip Gas Town and home dot folders,
+  # then take the newest session files first so the cap never drops recent work
+  HDASH=$(printf '%s' "$H" | tr '/.' '--')
+  SESS=$(session_files | sort -rn | head -n "$MAX_SESSIONS" | sed 's/^[0-9]* //' |
   while IFS= read -r f; do
     h40=$(head -n 40 "$f")
     t20=$(tail -n 20 "$f")
@@ -284,7 +307,7 @@ emit_list "session-cwd" "$(printf '%s' "$CWDROOTS" | sort -u)"
 
 # ------------------------------------------------------------------ 5. generic finder (time-limited)
 
-GEN=$(with_limit "$FIND_SECONDS" find "$H" -maxdepth 4 \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.claude" \
+GEN=$(with_limit "$FIND_SECONDS" find "$H" -maxdepth 4 \( -path "$H/Library" -o -path "$H/.*" -o -path "$H/gt" \
       -o -path "$H/.config" -o -path "$H/orchestrator" -o -path "$H/Pictures" -o -path "$H/Movies" -o -path "$H/Music" \
       -o -name node_modules -o -name .git -o -name .cache -o -name .npm -o -name .venv \) -prune -o -type f \
       \( -name state.json -o -name PROGRESS.md -o -name RETURN.md -o -name MANIFEST.md \) -mtime -"$DAYS" -print 2>/dev/null)

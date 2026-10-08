@@ -147,9 +147,20 @@ class Fixture:
         write(sess / "abc" / "subagents" / "a1.jsonl", "{}\n")
         write(sess / "abc" / "subagents" / "a2.jsonl", "{}\n")
         write(h / "Documents" / "notes" / "PROGRESS.md", "# personal notes\n")
+        # Gas Town infrastructure: never a run, never copied
+        dog = h / "gt" / "deacon" / "dogs" / "alpha"
+        write(dog / "state.json", "{}")
+        write(h / ".local" / "state" / "gastown" / "state.json", "{}")
+        hdash = str(h).replace("/", "-").replace(".", "-")
+        write(h / ".claude" / "projects" / (hdash + "-gt-deacon-dogs-alpha") / "g.jsonl", jsonl(
+            {"type": "user", "cwd": str(dog), "timestamp": "2026-10-06T01:00:00Z", "message": {"model": "claude-haiku-4-5"}}))
+        # an aborted run kept under sprints/_aborted, and a personal tax project
+        write(s / "_aborted" / "L7-first-attempt-2026-10-01" / "RETURN.md", "# RETURN: L7 first attempt\n10. Status: ABORTED\n")
+        write(h / "taxes-agent2" / "PROGRESS.md", "# Taxes 2025\n")
 
     def make_agent1(self):
         write(self.tmp / "agent1" / ".zshrc", "# nothing here\n")
+        write(self.tmp / "agent1" / "Downloads" / "fleet-ops-blitz-2026-10-03-v1.zip", "PK\n")
 
     def make_macbook(self):
         h = self.tmp / "macbook"
@@ -249,6 +260,15 @@ class HarvestTest(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("verification passed", text)
         self.assertIn("already patched", text)
+        for f in ("fleet.py", "hosts.conf"):
+            self.assertNotIn(b"\r\n", (self.fx.tools / f).read_bytes(), f)
+        # a CRLF copy left by the first version of the patch is put back to LF
+        hc = self.fx.tools / "hosts.conf"
+        hc.write_bytes(hc.read_bytes().replace(b"\n", b"\r\n"))
+        with redirect_stdout(io.StringIO()) as o2:
+            patch_fleet.main()
+        self.assertIn("restored to LF", o2.getvalue())
+        self.assertNotIn(b"\r\n", hc.read_bytes())
         sys.modules.pop("fleet", None)
         sys.path.insert(0, str(self.fx.tools))
         import fleet
@@ -289,6 +309,12 @@ class HarvestTest(unittest.TestCase):
         self.assertEqual(fh["kind"], "pattern")
         self.assertTrue(any(s.startswith("model") for s in fh["push_signals"]))
         self.assertTrue(any(s.startswith("intensity") for s in fh["push_signals"]))
+        # Gas Town is skipped everywhere; _aborted children are runs; a tax folder is restricted
+        self.assertFalse([r["path"] for r in m["rows"] if "/gt/" in r.get("path", "") or "/.local/" in r.get("path", "")])
+        ab = next(r for r in m["rows"] if r.get("path", "").endswith("_aborted/L7-first-attempt-2026-10-01"))
+        self.assertNotIn(ab["status"], ("not_found",))
+        tax = next(r for r in m["rows"] if r.get("path", "").endswith("taxes-agent2"))
+        self.assertIs(tax["sensitive"], True)
         notes = next(r for r in m["rows"] if r.get("path", "").endswith("Documents/notes"))
         self.assertNotEqual(notes["status"], "found")
         # old sprint folders outside the window are not copied
@@ -320,6 +346,8 @@ class HarvestTest(unittest.TestCase):
         # report
         rep = Path(m["harvest"]["report"]).read_text(encoding="utf-8")
         self.assertIn("macbook unreachable", rep)
+        sec4 = rep.split("## 4.")[1].split("## 5.")[0]
+        self.assertIn("agent1: fleet-ops-blitz-2026-10-03-v1.zip", sec4)
         excluded = rep.split("## 5.")[1].split("## 6.")[0]
         for rid in ("lawsuit-damages-L9-2026-10-01", "lawsuit-loops-2026-10-01", "colombia-project-playa-2026-10-01"):
             self.assertIn(rid, excluded)
@@ -403,7 +431,10 @@ class HarvestTest(unittest.TestCase):
         cases = {H + "/orchestrator/sprints/L7/loop": H + "/orchestrator/sprints/L7",
                  H + "/Downloads/pkg/loops/L1": H + "/Downloads/pkg", H + "/Downloads": None,
                  H + "/orchestrator/bin": None, H + "/fleet-harness": H + "/fleet-harness", H: None,
-                 H + "/Library/x": None, H + "/proj/loop": H + "/proj"}
+                 H + "/Library/x": None, H + "/proj/loop": H + "/proj",
+                 H + "/gt/deacon/dogs/alpha": None, H + "/.local/state/gastown": None,
+                 H + "/orchestrator/sprints/_aborted": None,
+                 H + "/orchestrator/sprints/_aborted/L7-first/loop": H + "/orchestrator/sprints/_aborted/L7-first"}
         for path, want in cases.items():
             self.assertEqual(harvest.run_root(path, H), want, path)
 

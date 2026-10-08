@@ -74,8 +74,12 @@ CONTROL_NAMES = {"state.json", "PROGRESS.md", "RETURN.md", "README.md", "MANIFES
 RUN_MARKERS = ("state.json", "PROGRESS.md", "RETURN.md", "MANIFEST.md", "SPRINT.md", "GOAL.txt")
 
 # Section 5.4. Strong words decide on their own; soft words lose to an explicit "Overall: normal" statement.
-# PLAN 5.4 list, plus the Colombia/Project Playa engagement (client material Elliot keeps PC-only)
-STRONG_WORDS = ["lawsuit", "litigation", "apeira", "toptal", "pave", "cureis", "deposition", "colombia", "playa"]
+# PLAN 5.4 list, plus the Colombia/Project Playa engagement (client material Elliot keeps PC-only) and taxes
+STRONG_WORDS = ["lawsuit", "litigation", "apeira", "toptal", "pave", "cureis", "deposition", "colombia", "playa",
+                "tax", "taxes"]
+# Home-level trees on the Macs that are infrastructure, not runs: ~/gt is Gas Town, agent2's always-on agent office
+# (its worker clones are hundreds of MB each). remote-find.sh skips the same trees.
+SKIP_TREES = ("gt",)
 SOFT_WORDS = ["client", "clients", "nda", "family", "personal debt", "whatsapp", "messages export", "photos"]
 
 SPRINT_ACCOUNTS = {"elliot@cybernovaequity.com", "luchansky.elliot.a@gmail.com", "elliot@nasarai.com"}
@@ -256,13 +260,18 @@ def run_root(path, home):
     home = home.rstrip("/")
     if d in (home, ""):
         return None
-    for base in ("orchestrator/sprints", "orchestrator/returns"):
+    aborted = home + "/orchestrator/sprints/_aborted"
+    if d == aborted:
+        return None
+    for base in ("orchestrator/sprints/_aborted", "orchestrator/sprints", "orchestrator/returns"):
         pre = "%s/%s/" % (home, base)
         if d.startswith(pre):
             return pre + d[len(pre):].split("/")[0]
     if d == home + "/orchestrator" or d.startswith(home + "/orchestrator/"):
         return None
-    for skip in ("Library", ".Trash", ".claude", ".config"):
+    if d.startswith(home + "/."):                # home dot folders (.claude, .config, .local, .Trash, ...)
+        return None
+    for skip in ("Library",) + SKIP_TREES:
         if d == "%s/%s" % (home, skip) or d.startswith("%s/%s/" % (home, skip)):
             return None
     for marker in ("/loops/", "/loop/"):
@@ -1488,6 +1497,19 @@ def cell(s, n=60):
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def unpacked_zips(zips, rows):
+    """Zips whose name matches no folder on the same host: packages that were delivered but never unpacked."""
+    out = []
+    for z in zips:
+        stem = re.sub(r"(?i)\.zip$", "", posixpath.basename(z.get("path", "")))
+        base = re.sub(r"-v\d+$", "", stem)
+        names = {posixpath.basename(r["path"].replace("\\", "/")) for r in rows if r.get("host") == z.get("host") and r.get("path")}
+        names |= {r["id"] for r in rows if r.get("host") == z.get("host") and r.get("status") in ("found", "confirm")}
+        if not any(n and (n.startswith(base) or base.startswith(n)) for n in names):
+            out.append(z)
+    return out
+
+
 def cmd_report(ctx, path=None):
     man = ctx.load()
     hv, rows = man["harvest"], man["rows"]
@@ -1560,7 +1582,11 @@ def cmd_report(ctx, path=None):
     repo_only = [r for r in rows if r.get("kind") == "returns-repo"]
     if repo_only:
         L.append("- Already in the returns repo with no plan: " + ", ".join(r["id"] for r in repo_only[:15]))
-    if not disc and not repo_only:
+    loose = unpacked_zips(hv.get("zips") or [], rows)
+    if loose:
+        L.append("- Package zips in a Mac's Downloads with no unpacked run folder (listed, not copied): " +
+                 "; ".join("%s: %s" % (z["host"], posixpath.basename(z["path"])) for z in loose[:10]))
+    if not disc and not repo_only and not loose:
         L.append("None.")
     L.append("")
     # 5. excluded for privacy (reproduced verbatim in the cloud reply)
@@ -1586,7 +1612,8 @@ def cmd_report(ctx, path=None):
     if not excl and not names:
         L.append("Nothing excluded.")
     L.append("- Not scanned: Jjess's Mac mini (not a Claude host, by decision); the PC's personal folders (Downloads, "
-             "Documents) and hidden C:\\Projects folders.")
+             "Documents) and hidden C:\\Projects folders; on the Macs, home dot folders and ~/gt (Gas Town, "
+             "agent2's always-on agent office: infrastructure, not runs).")
     L.append("")
     # 6. possible other hosts
     L += ["## 6. Possible other hosts", ""]

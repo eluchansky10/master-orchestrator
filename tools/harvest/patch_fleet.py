@@ -7,7 +7,8 @@ dispatches to them". fleet.py's load_hosts() reads fields 0 to 6 only, so this p
      called with harvest=True (only tools\harvest\harvest.py does), so caps, balance, dispatch and pull never
      touch them;
   2. appends the agent1 and pc rows to hosts.conf.
-Both files are backed up first (fleet.py.bak-<date>, hosts.conf.bak-<date>). Running it again changes nothing.
+Both files are backed up first (fleet.py.bak-<date>, hosts.conf.bak-<date>) and keep LF line endings. Running it
+again changes nothing, except that it restores LF if an earlier run left CRLF behind.
 
 Usage: C:\Python313\python.exe C:\Projects\master-orchestrator\tools\harvest\patch_fleet.py [--tools DIR]
 """
@@ -57,24 +58,44 @@ HOST_LINES = [
 ]
 
 
+def read(path):
+    """Text with its original line endings normalised to LF (the files are LF; Windows must not turn them CRLF)."""
+    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+
+
+def write(path, text):
+    path.write_bytes(text.encode("utf-8"))      # bytes, so Windows keeps LF
+
+
+def repair_eol(path):
+    """An earlier version of this script wrote CRLF on Windows. Put LF back when the backup it made was LF."""
+    data = path.read_bytes()
+    baks = sorted(path.parent.glob(path.name + ".bak-*"))
+    if b"\r\n" in data and baks and b"\r\n" not in baks[0].read_bytes():
+        path.write_bytes(data.replace(b"\r\n", b"\n"))
+        print("%s: line endings restored to LF (as in %s)" % (path.name, baks[0].name))
+
+
 def main():
     tools = Path(sys.argv[sys.argv.index("--tools") + 1]) if "--tools" in sys.argv else Path(__file__).resolve().parents[1]
     fleet_py, hosts = tools / "fleet.py", tools / "hosts.conf"
     stamp = dt.datetime.now().strftime("%Y-%m-%d")
-    src = fleet_py.read_text(encoding="utf-8")
+    for f in (fleet_py, hosts):
+        repair_eol(f)
+    src = read(fleet_py)
     if NEW in src:
         print("fleet.py: already patched")
     elif OLD in src:
         shutil.copyfile(fleet_py, fleet_py.with_name("fleet.py.bak-" + stamp))
-        fleet_py.write_text(src.replace(OLD, NEW), encoding="utf-8")
+        write(fleet_py, src.replace(OLD, NEW))
         print("fleet.py: load_hosts() now skips harvest-only rows (backup fleet.py.bak-%s)" % stamp)
     else:
         sys.exit("fleet.py: load_hosts() is not the expected text; not changed. Patch by hand.")
-    conf = hosts.read_text(encoding="utf-8")
+    conf = read(hosts)
     missing = [ln for ln in HOST_LINES if ln not in conf]
     if missing:
         shutil.copyfile(hosts, hosts.with_name("hosts.conf.bak-" + stamp))
-        hosts.write_text(conf.rstrip("\n") + "\n" + "\n".join(missing) + "\n", encoding="utf-8")
+        write(hosts, conf.rstrip("\n") + "\n" + "\n".join(missing) + "\n")
         print("hosts.conf: added %d lines (backup hosts.conf.bak-%s)" % (len(missing), stamp))
     else:
         print("hosts.conf: already has the harvest rows")
