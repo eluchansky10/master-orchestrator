@@ -168,6 +168,14 @@ class Fixture:
                 {"type": "assistant", "timestamp": ts_, "message": {"model": "claude-fable-5-1"}},
                 {"type": "assistant", "timestamp": ts_.replace("T0", "T1"), "message": {"model": "claude-fable-5-1"}}))
 
+        # a latest-model push whose folder holds nothing readable
+        (h / "empty-push").mkdir()
+        write(h / ".claude" / "projects" / "-empty-push" / "e.jsonl", jsonl(
+            {"type": "user", "cwd": str(h / "empty-push"), "timestamp": "2026-10-05T02:00:00Z",
+             "message": {"content": "<command-name>/goal</command-name>"}},
+            {"type": "assistant", "timestamp": "2026-10-05T02:00:00Z", "message": {"model": "claude-opus-5-5"}},
+            {"type": "assistant", "timestamp": "2026-10-05T12:00:00Z", "message": {"model": "claude-opus-5-5"}}))
+
     def make_agent1(self):
         write(self.tmp / "agent1" / ".zshrc", "# nothing here\n")
         write(self.tmp / "agent1" / "Downloads" / "fleet-ops-blitz-2026-10-03-v1.zip", "PK\n")
@@ -236,6 +244,18 @@ class Fixture:
         write(P / "master-orchestrator" / "prompts" / "L7-nasarai-devpush-2026-09-30" / "PROGRESS.md", "# staged\n")
         loop = P / "_shared" / "loops" / "account-handoff-recreate"
         write(loop / "gate" / "honest" / "x.txt", "x\n")
+        kh = self.tmp / "pc-home" / ".ssh" / "known_hosts"
+        key = " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFakeFakeFakeFakeFakeFake"
+        write(kh, "agents-mac-mini-1" + key + "\n100.99.90.115" + key + "\nmuse" + key + "\n|1|aGFzaA==|aGFzaA==" + key + "\n")
+        ts = {"Self": {"HostName": "DESKTOP-GJ0EK81", "DNSName": "desktop-gj0ek81.tail1.ts.net.", "TailscaleIPs": ["100.1.1.1"], "Online": True},
+              "Peer": {"a": {"HostName": "Agent\u2019s Mac mini", "DNSName": "agents-mac-mini-1.tail1.ts.net.",
+                             "TailscaleIPs": ["100.67.171.116"], "Online": True},
+                       "b": {"HostName": "Luchansky\u2019s MacBook Air", "DNSName": "luchanskys-macbook-air.tail1.ts.net.",
+                             "TailscaleIPs": ["100.116.248.10"], "Online": False},
+                       "c": {"HostName": "Jjess\u2019s Mac mini", "DNSName": "jjesss-mac-mini.tail1.ts.net.",
+                             "TailscaleIPs": ["100.99.90.115"], "Online": True},
+                       "d": {"HostName": "muse", "DNSName": "muse.tail1.ts.net.", "TailscaleIPs": ["100.103.168.33"], "Online": True}}}
+        write(self.tmp / "tailscale.json", json.dumps(ts))
         ph = self.tmp / "pc-home" / ".claude" / "projects"
         for i, cwd in enumerate(("C:\\", str(P), str(loop / "gate" / "honest"), str(P / "metronomics" / ".claude" / "worktrees" / "w1"),
                                  str(self.tmp / "pc-home" / "AppData" / "Local" / "Temp" / "cwguide-1"))):
@@ -270,6 +290,7 @@ class HarvestTest(unittest.TestCase):
         sys.modules.pop("fleet", None)
         self.fx.activate()
         os.environ["HARVEST_PC_HOME"] = str(self.fx.tmp / "pc-home")   # keep the real PC home out of tests
+        os.environ["HARVEST_TAILSCALE_JSON"] = str(self.fx.tmp / "tailscale.json")
 
     @classmethod
     def setUpClass(cls):
@@ -310,6 +331,10 @@ class HarvestTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "end-to-end fixture needs a POSIX sh as the fake Mac")
     def test_3_first_harvest(self):
+        for step in (("plan",), ("scan",), ("copy", "--dry-run"), ("report",)):
+            self.fx.run(*(step + ("--days", "14")))
+        dry = self.fx.manifest()["harvest"]["report"]
+        self.assertTrue(dry.endswith("-dryrun.md"), dry)      # a dry run never takes the real report's name
         out = self.fx.run("all", "--days", "14")
         m = self.fx.manifest()
         hosts = m["harvest"]["hosts"]
@@ -352,7 +377,16 @@ class HarvestTest(unittest.TestCase):
         # temp folders are never runs; a scratch workspace with a latest-model /goal session is a pattern candidate
         self.assertFalse([r for r in m["rows"] if r.get("path", "").startswith("/private/")])
         self.assertIn("agent2", m["harvest"]["loose_sessions"])
-        self.assertTrue([r for r in m["rows"] if r.get("path", "").endswith("scratch-workspaces/ws-design")])
+        ws = next(r for r in m["rows"] if r.get("path", "").endswith("scratch-workspaces/ws-design"))
+        # ... but a scratch workspace or a restricted pattern push waits for a confirm, and an empty one has nothing to copy
+        self.assertEqual(ws["status"], "confirm", ws)
+        self.assertIn("scratch workspace", ws["hold"])
+        self.assertFalse(ws.get("dest"))
+        self.assertFalse(tax.get("dest"), tax)
+        ep = next(r for r in m["rows"] if r.get("path", "").endswith("/empty-push"))
+        self.assertEqual(ep["status"], "listed", ep)
+        self.assertIn("0 readable files", ep["note"])
+        self.assertNotIn("-dryrun", m["harvest"]["report"])
         # PC: only run folders under C:\Projects, by work lane, loops or a dated run folder
         pcp = sorted(r["path"].replace("\\", "/").split("/Projects/")[-1] for r in m["rows"] if r.get("host") == "pc")
         self.assertIn("writing-home/work/claude-code/second-account-loops-2026-09-30", pcp)
@@ -409,6 +443,16 @@ class HarvestTest(unittest.TestCase):
         self.assertNotIn("taxes-agent2", sec4)
         self.assertIn("## 7. Pushed", rep)
         self.assertLess(len(rep.splitlines()), 151)
+        # section 6: scanned Macs are never "other hosts"; Jjess's Mac mini is named as never scanned; key text never shown
+        sec6 = rep.split("## 6.")[1].split("## 7.")[0]
+        others = [ln for ln in sec6.splitlines() if ln.startswith("- ") and "Tailscale peers" not in ln]
+        self.assertFalse([ln for ln in others if "agent" in ln.lower() or "macbook" in ln.lower()], sec6)
+        self.assertTrue([ln for ln in others if ln.startswith("- muse") and "host entry for muse" in ln], sec6)
+        self.assertTrue([ln for ln in others if "jjess" in ln.lower() and "never scanned" in ln], sec6)
+        self.assertIn("(scanned as agent2)", sec6)
+        self.assertIn("(scanned as macbook)", sec6)
+        self.assertIn("desktop-gj0ek81 online (scanned as pc)", sec6)
+        self.assertNotIn("AAAAC3", rep)
         self.assertEqual(m["harvest"]["audit"], [])
 
     @unittest.skipIf(os.name == "nt", "end-to-end fixture needs a POSIX sh as the fake Mac")

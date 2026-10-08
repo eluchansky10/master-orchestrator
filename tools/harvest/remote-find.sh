@@ -187,8 +187,9 @@ emit_folder() {
              printf '%s: ' "${f#"$D"/}"; head -c 1200 "$f" | tr '\n\t\r' '   '; printf '\n'; done)
   pf=$(printf '%s\n' "$CTL" | grep '/PROGRESS\.md$' | awk '{ print length($0) " " $0 }' | sort -n | head -n 1 | cut -d' ' -f2-)
   prog=""; [ -n "$pf" ] && prog=$(head -n 12 "$pf" | cut -c1-200)
-  printf '{"kind":"folder","path":%s,"why":%s,"mtime":%s,"newest":%s,"bytes":%s,"nfiles":%s,"recent":%s,' \
-    "$(js "$D")" "$(js "$why")" "$(mtime "$D")" "$newest" "$bytes" "$nfiles" "$recent"
+  lnk=false; [ -L "$D" ] && lnk=true     # find does not follow a linked folder, and neither does the copy
+  printf '{"kind":"folder","path":%s,"why":%s,"mtime":%s,"newest":%s,"bytes":%s,"nfiles":%s,"recent":%s,"link":%s,' \
+    "$(js "$D")" "$(js "$why")" "$(mtime "$D")" "$newest" "$bytes" "$nfiles" "$recent" "$lnk"
   printf '"has_state":%s,"has_progress":%s,"has_return":%s,"has_manifest":%s,"has_goal":%s,"has_sprint":%s,' \
     "$(has state.json)" "$(has PROGRESS.md)" "$(has RETURN.md)" "$(has MANIFEST.md)" "$(has GOAL.txt)" "$(has SPRINT.md)"
   printf '"control":%s,"return":%s,"doc_headings":%s,"manifest_overall":%s,"confidential_marks":%s,' \

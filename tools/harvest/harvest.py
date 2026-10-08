@@ -738,7 +738,7 @@ def light_sweep(ctx, peers):
     for p in peers:
         for key in [p["name"], p.get("dns", "")] + p.get("ips", []):
             if key:
-                names[key.lower()] = p["name"]
+                names[key.lower()] = peer_id(p)
     keyword = re.compile(r"sprint|loop|blitz|run-sprint|orchestrator-prompts|\bscp\b|rsync", re.I)
     addr = re.compile(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+|100\.\d+\.\d+\.\d+|[a-z0-9-]+(?:\.tail[0-9a-f]+\.ts\.net)?", re.I)
     evidence = {}
@@ -754,24 +754,71 @@ def light_sweep(ctx, peers):
                 peer = names.get(key) or names.get(tok.lower())
                 if not peer:
                     continue
-                line = "[line withheld: it may hold a credential]" if CREDENTIAL_LINE.search(ln) else ln.strip()[:160]
+                if is_kh:   # host names only; the key that follows them is never shown
+                    field = (ln.split() or [""])[0]
+                    line = "hashed host entry" if field.startswith("|") else "host entry for " + field[:100]
+                else:
+                    line = "[line withheld: it may hold a credential]" if CREDENTIAL_LINE.search(ln) else ln.strip()[:160]
                 ev = evidence.setdefault(peer, [])
                 if len(ev) < 3:
                     ev.append({"file": str(f), "line": n, "text": line})
     return evidence
 
 
+def norm_host(s):
+    """agent’s mac mini, agents-mac-mini-1 and Agents-Mac-mini.local compare equal enough: letters and digits only."""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def peer_id(p):
+    return p.get("dns") or p.get("name") or (p.get("ips") or ["?"])[0]
+
+
+def never_scan_peer(p):
+    keys = [p.get("name", ""), p.get("dns", "")] + list(p.get("ips") or [])
+    return any(k in NEVER_SCAN or norm_host(k).startswith("jjess") for k in keys if k)
+
+
+def mark_fleet_peers(peers, hosts, hinfo):
+    """Tag each Tailscale peer with the hosts.conf row it is (by IP, DNS name, ssh target or hostname), so a scanned
+    Mac is never listed as a possible other host."""
+    keys = {}
+    for h in hosts:
+        tgt = (h.get("ssh") or "").split("@")[-1].lower()
+        hn = (hinfo.get(h["name"]) or {}).get("hostname", "")
+        for k in (h["name"], tgt, tgt.split(".")[0] if not re.match(r"^\d+\.\d+\.\d+\.\d+$", tgt) else tgt,
+                  hn, hn.split(".")[0]):
+            if k and k != "local":
+                keys[k.lower()] = h["name"]
+                keys[norm_host(k)] = h["name"]
+    for p in peers:
+        hit = None
+        for k in [p.get("dns", ""), p.get("name", "")] + list(p.get("ips") or []):
+            if k and (keys.get(k.lower()) or keys.get(norm_host(k))):
+                hit = keys.get(k.lower()) or keys.get(norm_host(k))
+                break
+        p["fleet"] = "pc" if p.get("self") else hit
+        p["never_scan"] = never_scan_peer(p)
+    return peers
+
+
 def tailscale_peers():
     try:
-        r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, timeout=20)
-        data = json.loads(r.stdout.decode("utf-8", "replace"))
+        canned = os.environ.get("HARVEST_TAILSCALE_JSON")     # tests: a saved `tailscale status --json`
+        if canned:
+            data = json.loads(Path(canned).read_text(encoding="utf-8"))
+        else:
+            r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, timeout=20)
+            data = json.loads(r.stdout.decode("utf-8", "replace"))
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return []
     peers = []
-    for p in [data.get("Self", {})] + list((data.get("Peer") or {}).values()):
+    me = data.get("Self") or {}
+    for p in [me] + list((data.get("Peer") or {}).values()):
         if not p:
             continue
         peers.append({"name": (p.get("HostName") or "").lower(), "dns": (p.get("DNSName") or "").split(".")[0].lower(),
+                      "self": p is me,
                       "ips": [ip for ip in p.get("TailscaleIPs") or [] if "." in ip], "online": bool(p.get("Online")),
                       "os": p.get("OS", "")})
     return peers
@@ -944,6 +991,16 @@ def host_account(h, folder, row, key_to_account):
     return h.get("account") if h.get("account") and "@" in h.get("account", "") else None
 
 
+def pattern_hold(path, sens):
+    """Why a push scoring 4+ still waits for Elliot's confirm instead of being copied: a pattern guess is not enough
+    for restricted material or for a Desktop scratch workspace (it can hold anything a session touched)."""
+    if sens is True:
+        return "restricted: copied only if Elliot confirms"
+    if "/Library/Application Support/Claude/scratch-workspaces/" in path.replace("\\", "/"):
+        return "a Claude Desktop scratch workspace: copied only if Elliot confirms"
+    return None
+
+
 def run_base(rid):
     """L6-jev-conformed-2026-09-30-try1 and -v2 belong to L6-jev-conformed-2026-09-30."""
     return re.sub(r"-(try|v|attempt)\d+$", "", rid or "")
@@ -1113,16 +1170,28 @@ def cmd_scan(ctx):
                         r.update(common)
                 continue
             in_orch = "/orchestrator/sprints/" in fp or "/orchestrator/returns/" in fp
+            confirmed = posixpath.basename(fp) in choices.get("confirm", []) or fp in choices.get("confirm", [])
+            empty = f.get("link") or (f.get("nfiles") == 0)
             if name == "pc":
                 kind, status = "pc", ("pointer" if score >= PUSH_HARVEST or f.get("has_return") else "listed")
             elif in_orch:
                 kind, status = "discovered", ("found" if f.get("recent") else "old")
             elif posixpath.basename(fp) in choices.get("drop", []) or fp in choices.get("drop", []):
                 kind, status = "pattern", "dropped"
-            elif score >= PUSH_HARVEST or posixpath.basename(fp) in choices.get("confirm", []) or fp in choices.get("confirm", []):
-                kind, status = "pattern", "found"
+            elif empty and (score >= PUSH_CONFIRM or confirmed):
+                kind, status = "pattern", "listed"
+                common["note"] = ("a symbolic link, never followed, so nothing to copy" if f.get("link")
+                                  else "0 readable files, so nothing to copy (empty, or not readable over SSH)")
+            elif score >= PUSH_HARVEST or confirmed:
+                hold = None if confirmed else pattern_hold(fp, sens)
+                kind, status = "pattern", ("confirm" if hold else "found")
+                if hold:
+                    common["hold"] = hold
             elif score >= PUSH_CONFIRM:
                 kind, status = "pattern", "confirm"
+                hold = pattern_hold(fp, sens)
+                if hold:
+                    common["hold"] = hold
             else:
                 kind, status = "discovered", "listed"
             rid = return_sprint_id(f) or posixpath.basename(fp)
@@ -1178,8 +1247,8 @@ def cmd_scan(ctx):
     propagate_sensitivity(rows)
     # sweep for other hosts (section 3.6)
     evidence = light_sweep(ctx, peers)
-    fleet_names = {"agent2", "agents-mac-mini-1", "agent1", "agent-1", "agent-1-1", "macbook", "luchanskys-macbook-air",
-                   "desktop-gj0ek81", "pc"}
+    mark_fleet_peers(peers, hosts, hinfo)
+    fleet_names = {peer_id(p) for p in peers if p.get("fleet")} | {h["name"] for h in hosts}
     man["harvest"].update({"scanned_utc": now_utc().isoformat(timespec="seconds"), "hosts": hinfo,
                            "tailscale": peers, "zips": zips, "loose_sessions": loose,
                            "other_hosts": {k: v for k, v in evidence.items() if k not in fleet_names}})
@@ -1315,6 +1384,9 @@ def to_copy(rows):
         if not r.get("path") or r.get("host") == "pc":
             continue
         if r["status"] == "found" and r.get("kind") in ("planned", "discovered", "pattern"):
+            if r.get("nfiles") == 0:
+                r["copy"] = "nothing to copy: 0 readable files"
+                continue
             pick.append(r)
     seen, out = set(), []
     for r in pick:
@@ -1599,8 +1671,10 @@ def cmd_push(ctx):
 
 # ---------------------------------------------------------------- report
 
-def report_path(ctx):
+def report_path(ctx, dry_run=False):
     base = "HARVEST-%s" % ctx.started.strftime("%Y-%m-%d")
+    if dry_run:          # dry runs never use up a real report's name
+        return ctx.out / (base + "-dryrun.md")
     p = ctx.out / (base + ".md")
     n = 1
     while p.exists():
@@ -1631,7 +1705,7 @@ def cmd_report(ctx, path=None):
     man = ctx.load()
     hv, rows = man["harvest"], man["rows"]
     hosts = hv.get("hosts", {})
-    path = Path(path) if path else report_path(ctx)
+    path = Path(path) if path else report_path(ctx, dry_run=bool(hv.get("dry_run")))
     L = ["# Blitz harvest %s" % hv.get("date", ""), "",
          "Window: last %s days (since %s). Run %s from %s. Hosts: %s." % (
              hv.get("days"), hv.get("window_start_utc"), now_utc().strftime("%Y-%m-%d %H:%M UTC"), hv.get("root"),
@@ -1705,10 +1779,16 @@ def cmd_report(ctx, path=None):
     C4 = []
     for r in conf:
         C4.append("- Confirm or drop: a restricted folder on %s, score %s/5 (named in section 5)" % (r["host"], r.get("push_score"))
-                  if restricted(r) else "- Confirm or drop: %s on %s, score %s/5%s (%s): %s" % (
+                  if restricted(r) else "- Confirm or drop: %s on %s, score %s/5%s%s (%s): %s" % (
                       cell(r["id"], 40), r["host"], r.get("push_score"),
                       (", %d session%s" % (r["sessions"], "" if r["sessions"] == 1 else "s")) if r.get("sessions") else "",
+                      ", " + r["hold"] if r.get("hold") else "",
                       short(r, 50), cell("; ".join(r.get("push_signals") or []), 140)))
+    held_empty = [r for r in rows if r.get("kind") == "pattern" and r.get("status") == "listed" and r.get("note")]
+    if held_empty:
+        C4.append("- Push-like folders with nothing to copy: " + "; ".join(
+            ("a restricted folder on %s" % r["host"]) if restricted(r) else "%s on %s: %s" % (cell(r["id"], 40), r["host"], r["note"])
+            for r in held_empty[:6]))
     if conf:
         C4.append("- To harvest one from now on: `harvest.py confirm <name>`; to stop listing it: `harvest.py drop <name>`.")
     X4 = []
@@ -1759,20 +1839,28 @@ def cmd_report(ctx, path=None):
     # 6. possible other hosts
     S6 = ["## 6. Possible other hosts", ""]
     oh = hv.get("other_hosts") or {}
+    ts = hv.get("tailscale") or []
+    by_id = {peer_id(p): p for p in ts}
+    listed = 0
     for peer, ev in oh.items():
-        jj = peer in NEVER_SCAN
+        p = by_id.get(peer, {"name": peer, "dns": peer})
+        if p.get("fleet"):
+            continue
+        listed += 1
+        jj = p.get("never_scan") or never_scan_peer(p)
         S6.append("- %s: %s Evidence: %s" % (
-            peer, "Jjess's Mac mini: not a Claude host; not scanned." if jj else
+            p.get("name") or peer, "never scanned, by decision." if jj else
             "not scanned. To include it, add a `harvest_only` row for it to tools\\hosts.conf.",
             "; ".join("%s:%s %s" % (Path(e["file"]).name, e["line"],
                                     "[line withheld: it may hold a credential]" if CREDENTIAL_LINE.search(e["text"]) else cell(e["text"], 90))
                       for e in ev[:2])))
-    if not oh:
+    if not listed:
         S6.append("None.")
-    ts = hv.get("tailscale") or []
     if ts:
-        S6.append("- Tailscale peers at scan time: " + ", ".join("%s %s" % (p["name"] or p["dns"], "online" if p["online"] else "offline")
-                                                                for p in ts if p.get("name") or p.get("dns")))
+        S6.append("- Tailscale peers at scan time: " + ", ".join("%s %s%s" % (
+            p["name"] or p["dns"], "online" if p["online"] else "offline",
+            " (scanned as %s)" % p["fleet"] if p.get("fleet") else (" (never scanned)" if p.get("never_scan") else ""))
+            for p in ts if p.get("name") or p.get("dns")))
     S6.append("")
     # 7. pushed
     S7 = ["## 7. Pushed to orchestrator-returns", ""]

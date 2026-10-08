@@ -98,7 +98,7 @@
         },
         "tailscale": {
           "type": "array",
-          "description": "tailscale status rows: name, ip, os, online; listed only, never scanned unless in hosts.conf"
+          "description": "tailscale status rows: name, dns, ips, os, online, self, fleet (the hosts.conf row it is, if any), never_scan; listed only, never scanned unless in hosts.conf"
         },
         "zips": {
           "type": "array",
@@ -427,6 +427,10 @@
         "returns_copy": {
           "type": "string",
           "description": "the host's ~/orchestrator/returns/<id> copy of this run's RETURN.md (fleet.py pull carries it; not copied twice)"
+        },
+        "hold": {
+          "type": "string",
+          "description": "why a push scoring 4+ waits for Elliot's confirm instead of being copied (restricted, or a Desktop scratch workspace)"
         }
       }
     }
